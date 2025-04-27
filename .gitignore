@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+.env
+
+# Models and Vector Store
+rag-pipeline/models/
+rag-pipeline/vector_store/
+rag-pipeline/uploaded_pdfs/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Docker
+.docker/
+
+# Testing
+.coverage
+htmlcov/
+
+# Monitoring data
+prometheus/data/
+grafana/data/
+
+# Kubernetes secrets
+kubernetes/*/secrets/
+
+# Jenkins
+jenkins/jenkins-config/secrets/
+
+# OS specific
+.DS_Store
+Thumbs.db
