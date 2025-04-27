@@ -58,8 +58,6 @@ FastAPIInstrumentor.instrument_app(app)
 assistant = None 
 
 @app.on_event("startup")
-
-
 async def startup_event():
     """Initialize resources on application startup"""
     global assistant 
@@ -79,6 +77,37 @@ class QueryRequest(BaseModel):
     """Query request model."""
     question: str 
 
+@app.post("/api/query")
+async def query(request: QueryRequest):
+    """Standard query endpoint that returns complete response"""
+    if not assistant: 
+        return {"error": "OPT-RAG Assistant not initialized"}
+    
+    logger.info(f"Received query: {request.question}")
+    result = assistant.answer_question(request.question)
+
+    return {
+        "answer": result["answer"], 
+        "processing_time": result["processing_time"]
+    }
+
+@app.post("/api/query/stream")
+async def stream_query(request: QueryRequest):
+    """Streaming query endpoint."""
+    if not assistant:
+        return {"error": "OPT-RAG Assistant not initialized"}
+    
+    logger.info(f"Received streaming query: {request.question}")
+
+    async def generate():
+        async for token in assistant.astream_reponse(request.question):
+            yield f"data: {token}\n\n"
+        yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(
+        generate(), 
+        media_type="text/event-stream"
+    )
 
 @app.get("/health")
 async def health():
