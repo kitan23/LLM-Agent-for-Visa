@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'opt-rag'
+    static_configs:
+      - targets: ['localhost:8000']  # Assuming metrics endpoint is at /metrics
+        labels:
+          instance: 'opt-rag-instance'
+          service: 'opt-rag'

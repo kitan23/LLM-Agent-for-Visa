@@ -139,7 +139,6 @@ def build_vector_store(
     chunks: List[str],
     vector_store_path: str,
     device: str,
-    force_rebuild: bool = False
 ) -> FAISS:
     """Build or load a vector store from document chunks.
     

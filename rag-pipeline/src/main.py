@@ -7,14 +7,16 @@ the OPT-RAG International Student Visa Assistant.
 
 import logging
 import argparse
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from llm.assistant import OPTRagAssistant
 from utils.logging import setup_logging
+from utils.metrics import initialize_metrics, APP_INFO
 from utils.config import Settings, get_settings
 from pydantic_settings import BaseSettings
 
@@ -62,7 +64,11 @@ async def startup_event():
     """Initialize resources on application startup"""
     global assistant 
     logger.info("Initializing OPT-RAG Assistant")
+
     try: 
+        # Initialize metrics with application info
+        initialize_metrics(APP_INFO.version, APP_INFO.model_name)
+
         # assistant = OPTRagAssistant(
         #     model_path = settings.model_path, 
         #     vector_store = settings.vector_store_path, 
@@ -72,6 +78,10 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize OPT-RAG assistant {e}")
 
+@app.get("/metrics")
+def metrics():
+    """Endpoint for exposing the Prometheus metrics."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 class QueryRequest(BaseModel):
     """Query request model."""
