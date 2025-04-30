@@ -17,7 +17,7 @@ APP_INFO = Info(
 QUERY_COUNT = Counter(
     "opt_rag_query_count",   # metric name
     "Total number of queries processed",  # metric description
-    ["status"],  # labels
+    ["status", "query_type"],  # labels
 )
 
 QUERY_LATENCY = Histogram(
@@ -28,7 +28,8 @@ QUERY_LATENCY = Histogram(
 
 QUERY_ERRORS = Counter(
     "opt_rag_query_errors", 
-    "Number of query errors"
+    "Number of query errors",
+    ["error_type"]  # Add error_type label
 )
 
 # Model metrics

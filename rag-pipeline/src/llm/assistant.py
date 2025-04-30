@@ -20,7 +20,7 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 from llm.callbacks import StreamingCallbackHandler, AsyncStreamingCallbackHandler
-from utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT
+from utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
 from retriever.vector_store import load_vector_store, build_vector_store
 from document_processor.pipeline import process_documents
 
@@ -244,6 +244,12 @@ class OPTRagAssistant:
 
         try: 
 
+            # Measure vector count updates 
+            before_count = 0 
+            if hasattr(self.vector_store, "_index"):
+                before_count = self.vector_store._index.ntotal
+            
+
             # call async process_documents 
             result = await process_documents(
                 source_path = file_path, 
@@ -261,9 +267,11 @@ class OPTRagAssistant:
                 force_reload=True
             )
 
+            after_count = 0 
             # Update vector count metric 
             if hasattr(self.vector_store, "_index"):
-                VECTOR_COUNT.set(self.vector_store._index.ntotal)
+                after_count = self.vector_store._index.ntotal
+                VECTOR_COUNT.set(after_count)
             
             processing_time = time.time() - start_time 
             logger.info(f"Documents added successfully in {processing_time:.2f} seconds")
@@ -272,7 +280,8 @@ class OPTRagAssistant:
                 "status": "success", 
                 "document_processed": len(result.get("documents", [])),
                 "chunks_created": len(result.get("chunks", [])),
-                "processing_time": processing_time
+                "processing_time": processing_time,
+                "vectors_added": after_count - before_count
             }
         
         except Exception as e:
@@ -333,16 +342,22 @@ class OPTRagAssistant:
             Dict containing the answer and retrieved documents
         """
         logger.info(f"Processing query: {query}")
-        QUERY_COUNT.inc()
+        QUERY_COUNT.labels(status="started", query_type="standard").inc()
         
         try:
             start_time = time.time()
-            
+
+
+
             # Create retriever
+            retrieval_start_time = time.time()
             retriever = self.vector_store.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 5}  # Retrieve top 5 most relevant documents
             )
+
+            # Measure retrieval time 
+            VECTOR_RETRIEVAL_LATENCY.observe(time.time() - retrieval_start_time)
 
             if stream: 
                 # Setup streaming
@@ -398,9 +413,15 @@ class OPTRagAssistant:
             # Add timing information to response
             response["processing_time"] = elapsed_time
             
+
+            QUERY_COUNT.labels(status="completed", query_type="standard").inc()
+
             return response
 
         except Exception as e:
+            # Track error properly 
+            QUERY_ERRORS.labels(error_type = type(e).__name__).inc()
+            QUERY_COUNT.labels(status="error", query_type="standard").inc()
             logger.error(f"Error answering question: {e}")
             return {
                 "answer": "I'm encountered an error while processing your question. Please try again.", 
@@ -417,7 +438,7 @@ class OPTRagAssistant:
         Yields:
             Tokens as they're generated
         """
-        QUERY_COUNT.inc()
+        QUERY_COUNT.labels(status="started", query_type="streaming").inc()
         
         # Create async queue for streaming
         queue = asyncio.Queue()
@@ -478,7 +499,14 @@ class OPTRagAssistant:
             logger.info(f"Streaming query processed in {elapsed_time:.2f} seconds")
             QUERY_LATENCY.observe(elapsed_time)
 
+            QUERY_COUNT.labels(status="completed", query_type="streaming").inc()
+
         except Exception as e:
+
+            # Track error properly 
+            QUERY_ERRORS.labels(error_type = type(e).__name__).inc()
+            QUERY_COUNT.labels(status="error", query_type="streaming").inc()
+
             logger.error(f"Error streaming response: {e}")
             yield f"\n I'm sorry, an error occurred: {str(e)}"
         

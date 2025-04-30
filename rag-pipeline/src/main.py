@@ -65,9 +65,10 @@ async def startup_event():
     global assistant 
     logger.info("Initializing OPT-RAG Assistant")
 
+    # Initialize metrics with application info
+    initialize_metrics(APP_INFO.version, APP_INFO.model_name)
+
     try: 
-        # Initialize metrics with application info
-        initialize_metrics(APP_INFO.version, APP_INFO.model_name)
 
         # assistant = OPTRagAssistant(
         #     model_path = settings.model_path, 
