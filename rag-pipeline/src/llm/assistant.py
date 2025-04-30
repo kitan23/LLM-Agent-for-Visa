@@ -347,8 +347,6 @@ class OPTRagAssistant:
         try:
             start_time = time.time()
 
-
-
             # Create retriever
             retrieval_start_time = time.time()
             retriever = self.vector_store.as_retriever(

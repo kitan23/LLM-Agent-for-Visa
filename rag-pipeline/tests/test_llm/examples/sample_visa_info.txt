@@ -1,0 +1,28 @@
+# OPT (Optional Practical Training) Information
+
+## Definition
+Optional Practical Training (OPT) is temporary employment authorization that allows F-1 students to gain practical experience in their field of study.
+
+## Eligibility Requirements
+- Must be in valid F-1 status
+- Must have been enrolled in a SEVP-certified school for one full academic year
+- Employment must be directly related to the student's major area of study
+
+## Types of OPT
+1. Pre-completion OPT: Used before completing academic program
+2. Post-completion OPT: Used after completing academic program
+
+## Application Process
+1. Request recommendation from DSO (gets a new I-20 with OPT recommendation)
+2. File Form I-765 with USCIS
+3. Pay application fee
+4. Wait for approval and EAD card
+
+## Duration
+Standard post-completion OPT allows for 12 months of work authorization.
+STEM extension provides an additional 24 months for qualifying students.
+
+## Important Deadlines
+- Must apply no more than 90 days before program end date
+- Must apply no later than 60 days after program end date
+- Must apply before I-20 program end date 
