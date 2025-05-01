@@ -131,108 +131,119 @@ class TestOPTRagAssistant:
             assert "processing_time" in result
             mock_chain.invoke.assert_called_once_with({"question": "What are OPT visa requirements?"})
     
-    # @pytest.mark.asyncio
-    # async def test_add_documents(self, test_model_path, test_vector_store_path, mock_assistant_dependencies):
-    #     """Test document addition functionality."""
-    #     # Arrange
-    #     with patch("llm.assistant.process_documents", new_callable=AsyncMock) as mock_process, \
-    #          patch("llm.assistant.load_vector_store") as mock_load_store, \
-    #          patch("llm.assistant.VECTOR_COUNT"):
+    @pytest.mark.asyncio
+    async def test_add_documents(self, test_model_path, test_vector_store_path, mock_assistant_dependencies):
+        """Test document addition functionality."""
+        # Arrange
+        with patch("llm.assistant.process_documents", new_callable=AsyncMock) as mock_process, \
+             patch("llm.assistant.load_vector_store") as mock_load_store, \
+             patch("llm.assistant.VECTOR_COUNT"):
             
-    #         # Setup mock process_documents response
-    #         mock_process.return_value = {
-    #             "documents": ["doc1", "doc2"],
-    #             "chunks": ["chunk1", "chunk2", "chunk3"]
-    #         }
+            # Setup mock process_documents response
+            mock_process.return_value = {
+                "documents": ["doc1", "doc2"],
+                "chunks": ["chunk1", "chunk2", "chunk3"]
+            }
             
-    #         # Create a refreshed mock vector store for the reload
-    #         refreshed_store = MagicMock()
-    #         refreshed_store._index = MagicMock()
-    #         refreshed_store._index.ntotal = 103  # Original 100 + 3 new chunks
-    #         mock_load_store.return_value = refreshed_store
+            # Create a refreshed mock vector store for the reload
+            refreshed_store = MagicMock()
+            refreshed_store._index = MagicMock()
+            refreshed_store._index.ntotal = 103  # Original 100 + 3 new chunks
+            mock_load_store.return_value = refreshed_store
             
-    #         assistant = OPTRagAssistant(
-    #             model_path=str(test_model_path),
-    #             vector_store_path=str(test_vector_store_path),
-    #             device="cpu"
-    #         )
+            assistant = OPTRagAssistant(
+                model_path=str(test_model_path),
+                vector_store_path=str(test_vector_store_path),
+                device="cpu"
+            )
             
-    #         # Act
-    #         result = await assistant.add_documents("test_document.pdf")
+            # Act
+            result = await assistant.add_documents("test_document.pdf")
             
-    #         # Assert
-    #         assert result["status"] == "success"
-    #         assert result["document_processed"] == 2
-    #         assert result["chunks_created"] == 3
-    #         assert "processing_time" in result
-    #         mock_process.assert_called_once_with(
-    #             source_path="test_document.pdf", 
-    #             vector_store_path=Path(test_vector_store_path),
-    #             device="cpu",
-    #             chunk_size=1000,
-    #             chunk_overlap=200
-    #         )
-    #         # Check if vector store was reloaded after adding documents
-    #         mock_load_store.assert_called_with(
-    #             vector_store_path=Path(test_vector_store_path),
-    #             device="cpu",
-    #             force_reload=True
-    #         )
+            # Assert
+            assert result["status"] == "success"
+            assert result["document_processed"] == 2
+            assert result["chunks_created"] == 3
+            assert "processing_time" in result
+            mock_process.assert_called_once_with(
+                source_path="test_document.pdf", 
+                vector_store_path=Path(test_vector_store_path),
+                device="cpu",
+                chunk_size=1000,
+                chunk_overlap=200
+            )
+            # Check if vector store was reloaded after adding documents
+            mock_load_store.assert_called_with(
+                vector_store_path=Path(test_vector_store_path),
+                device="cpu",
+                force_reload=True
+            )
     
-    # @pytest.mark.asyncio
-    # async def test_astream_response(self, test_model_path, test_vector_store_path, mock_assistant_dependencies):
-    #     """Test streaming response functionality."""
-    #     # Arrange
-    #     with patch("llm.assistant.AsyncStreamingCallbackHandler") as mock_handler_class, \
-    #          patch("llm.assistant.AsyncCallbackManager"), \
-    #          patch("llm.assistant.HuggingFacePipeline") as mock_llm, \
-    #          patch("llm.assistant.QUERY_COUNT"), \
-    #          patch("llm.assistant.QUERY_LATENCY"):
+    @pytest.mark.asyncio
+    async def test_astream_response(self, test_model_path, test_vector_store_path, mock_assistant_dependencies):
+        """Test streaming response functionality."""
+        # Arrange
+        with patch("llm.assistant.AsyncStreamingCallbackHandler") as mock_handler_class, \
+            patch("langchain.callbacks.manager.AsyncCallbackManager"), \
+            patch("llm.assistant.pipeline") as mock_pipeline, \
+            patch("llm.assistant.HuggingFacePipeline") as mock_llm, \
+            patch("llm.assistant.QUERY_COUNT"), \
+            patch("llm.assistant.QUERY_LATENCY"):
             
-    #         # Setup mock streaming
-    #         mock_handler = AsyncMock()
-    #         mock_handler_class.return_value = mock_handler
+            # Setup mock streaming
+            mock_handler = AsyncMock()
+            mock_handler_class.return_value = mock_handler
             
-    #         # Mock queue for tokens
-    #         mock_queue = AsyncMock()
-    #         mock_queue.get = AsyncMock(side_effect=[
-    #             "First token", 
-    #             "Second token", 
-    #             asyncio.TimeoutError  # To exit the streaming loop
-    #         ])
+            # Mock queue for tokens
+            mock_queue = AsyncMock()
+            mock_queue.get = AsyncMock(side_effect=[
+                "First token", 
+                "Second token", 
+                asyncio.TimeoutError  # To exit the streaming loop
+            ])
+            mock_queue.task_done = MagicMock()
             
-    #         # Setup mock LLM
-    #         mock_llm_instance = AsyncMock()
-    #         mock_llm.return_value = mock_llm_instance
-    #         mock_llm_instance.ainvoke = AsyncMock()
+            # Setup mock LLM pipeline
+            mock_pipe_instance = MagicMock()
+            mock_pipeline.return_value = mock_pipe_instance
+
+            mock_llm_instance = AsyncMock()
+            async def fake_ainvoke(*args, **kwargs):
+                return MagicMock()  # can include return content if needed
+
+            mock_llm_instance.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+            mock_llm.return_value = mock_llm_instance
+                        
+            # Create a mock task that completes after first timeout
+            class MockTask:
+                def __init__(self):
+                    self._call_count = 0
+                def done(self):
+                    self._call_count += 1
+                    return self._call_count > 1
+                async def __await__(self):
+                    return iter(())
             
-    #         # Create a mock task that completes after first timeout
-    #         class MockTask:
-    #             def __init__(self):
-    #                 self._call_count = 0
+            # Create a mock asyncio Task
+            mock_task = asyncio.Future()
+            mock_task.set_result(MagicMock())  # simulate task finishing
+            
+            with patch("asyncio.Queue", return_value=mock_queue), \
+                 patch("asyncio.create_task", return_value=mock_task):
                 
-    #             def done(self):
-    #                 self._call_count += 1
-    #                 return self._call_count > 1
-            
-    #         mock_task = MockTask()
-            
-    #         with patch("asyncio.Queue", return_value=mock_queue), \
-    #              patch("asyncio.create_task", return_value=mock_task):
+                assistant = OPTRagAssistant(
+                    model_path=str(test_model_path),
+                    vector_store_path=str(test_vector_store_path),
+                    device="cpu"
+                )
                 
-    #             assistant = OPTRagAssistant(
-    #                 model_path=str(test_model_path),
-    #                 vector_store_path=str(test_vector_store_path),
-    #                 device="cpu"
-    #             )
+                # Act
+                tokens = []
+                async for token in assistant.astream_response("What are OPT visa requirements?"):
+                    tokens.append(token)
                 
-    #             # Act
-    #             tokens = []
-    #             async for token in assistant.astream_response("What are OPT visa requirements?"):
-    #                 tokens.append(token)
-                
-    #             # Assert
-    #             assert len(tokens) == 3  # Initial message + 2 tokens
-    #             assert tokens[0] == "Searching visa regulations...\n\n"
-    #             assert tokens[1] == "First token"
-    #             assert tokens[2] == "Second token" 
+                # Assert
+                assert len(tokens) == 3  # Initial message + 2 tokens
+                assert tokens[0] == "Searching visa regulations...\n\n"
+                assert tokens[1] == "First token"
+                assert tokens[2] == "Second token" 
