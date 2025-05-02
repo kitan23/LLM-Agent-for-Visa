@@ -10,9 +10,9 @@ import asyncio
 from pathlib import Path
 from typing import List, Union, Optional
 
-from document_processor.loader import load_pdf_documents
-from document_processor.splitter import split_documents
-from retriever.vector_store import build_vector_store
+from .loader import load_pdf_documents
+from .splitter import split_documents
+from ..retriever.vector_store import build_vector_store
 
 
 logger = logging.getLogger("opt_rag.document_processor.pipeline")
@@ -41,17 +41,20 @@ async def process_documents(
         force_rebuild: Force rebuilding vector store
         
     Returns:
-        FAISS vector store
+        Dictionary containing vector store and processing metadata
     """
 
     logger.info(f"Starting document processing pipeline from {source_path}")
+    result = {"status": "success"}
 
     # Load documents 
     documents = await load_pdf_documents(source_path)
     if not documents: 
         logger.warning("No documents were loaded, aborting pipeline")
-        return None 
+        return {"status": "error", "error": "No documents were loaded"}
 
+    result["documents"] = documents
+    result["document_count"] = len(documents)
 
     # Split the documents into chunk 
     chunks = split_documents(
@@ -62,6 +65,9 @@ async def process_documents(
 
     if not chunks:
         chunks = ["This is a dummy chunk."]
+    
+    result["chunks"] = chunks
+    result["chunk_count"] = len(chunks)
 
     # Build vector store
     vector_store = build_vector_store(
@@ -70,9 +76,11 @@ async def process_documents(
         device = device, 
         force_rebuild = force_rebuild
     )
+    
+    result["vector_store"] = vector_store
 
     logger.info("Document processing pipeline completed successfully")
-    return vector_store
+    return result
 
 
 
@@ -95,7 +103,7 @@ def run_processing_pipeline(
         force_rebuild: Force rebuilding vector store
         
     Returns:
-        FAISS vector store
+        Dictionary containing vector store and processing metadata
     """
     return asyncio.run(process_documents(
         source_path=source_path,

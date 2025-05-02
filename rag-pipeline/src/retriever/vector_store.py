@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 logger = logging.getLogger("opt_rag.vector_store")
 
@@ -127,7 +127,7 @@ def load_vector_store(vector_store_path: str, device: str, force_reload: bool = 
             allow_dangerous_deserialization=True
         )
         
-        logger.info(f"Vector store loaded successfully with {vector_store._index.ntotal} vectors")
+        logger.info(f"Vector store loaded successfully with {vector_store.index.ntotal} vectors")
         return vector_store
         
     except Exception as e:

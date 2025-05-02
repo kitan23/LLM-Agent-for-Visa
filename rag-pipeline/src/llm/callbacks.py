@@ -45,11 +45,26 @@ class AsyncStreamingCallbackHandler(BaseCallbackHandler):
             queue: An asyncio queue for collecting tokens and text.
         
         """
+        super().__init__()
         self.queue = queue 
     
     async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
         """Process new tokens as they are generated."""
         await self.queue.put(token)
+        
+    def on_llm_new_token_sync(self, token: str, **kwargs: Any) -> None:
+        """Synchronous fallback for token handling - needed for some LangChain versions."""
+        # Use asyncio.run_coroutine_threadsafe or create_task in the running loop if available
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self.queue.put(token))
+            else:
+                # Fallback in case we're not in an async context
+                asyncio.run(self.queue.put(token))
+        except RuntimeError:
+            # If we can't get event loop, just print the token directly
+            print(token, end="", flush=True)
 
 class StreamingStdOutCallbackHandler(BaseCallbackHandler): 
     """Handler for streaming tokens to standard output."""

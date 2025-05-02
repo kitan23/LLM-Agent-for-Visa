@@ -9,20 +9,18 @@ Visa Assistant, handling model loading, vector store management, and query proce
 import logging
 import time
 import asyncio
+import threading
 from typing import Dict, Any, Optional, AsyncIterator, Iterator, Union, List
 from pathlib import Path
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, pipeline
-from langchain_huggingface import HuggingFacePipeline
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
 from langchain_core.prompts import ChatPromptTemplate
 
-from llm.callbacks import StreamingCallbackHandler, AsyncStreamingCallbackHandler
-from utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
-from retriever.vector_store import load_vector_store, build_vector_store
-from document_processor.pipeline import process_documents
+from .callbacks import AsyncStreamingCallbackHandler
+from ..utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
+from ..retriever.vector_store import load_vector_store, build_vector_store
+from ..document_processor.pipeline import process_documents
 
 logger = logging.getLogger("opt_rag.assistant")
 
@@ -68,8 +66,8 @@ class OPTRagAssistant:
 
 
         # Update vector count metric 
-        if hasattr(self.vector_store, "_index"):
-            VECTOR_COUNT.set(self.vector_store._index.ntotal)
+        if hasattr(self.vector_store, "index"):
+            VECTOR_COUNT.set(self.vector_store.index.ntotal)
 
         logger.info("OPT-RAG Assistant initialized successfully")
 
@@ -173,10 +171,12 @@ class OPTRagAssistant:
         You are OPT-RAG, an expert assistant specializing in international student visa regulations and processes in the United States.
 
         ## ROLE AND GUIDELINES
-        - Provide accurate information based ONLY on official USCIS documents, university policies, and government regulations in the context provided
+        - ONLY provide information that is explicitly supported by the context below
+        - DO NOT make any claims or assertions that aren't directly supported by the provided context
         - Focus specifically on visa-related issues: OPT applications, CPT authorization, study/work permits, and visa status questions
-        - NEVER fabricate information or provide speculative advice on visa matters
-        - If information is not available in the context, clearly state this limitation
+        - If information is not available in the context, clearly state "Based on the provided context, I don't have specific information about that"
+        - Never fabricate information or provide speculative advice on visa matters
+        - When answering, always check if your response contradicts any information in the context - if it does, defer to the context
         - Always indicate the source of information in your responses
         - Avoid legal advice; clarify when questions require consultation with immigration attorneys
 
@@ -188,34 +188,16 @@ class OPTRagAssistant:
         Primary concern: Visa and immigration matters
 
         ## RESPONSE FORMAT
-        - Begin with a direct answer to the question
-        - Provide specific, relevant details from official sources
+        - Begin with a direct and factually accurate answer to the question based ONLY on the context provided
+        - Provide specific, relevant details from official sources in the context
         - Include citation to specific documents/policies when available
-        - Highlight important deadlines or requirements
-        - If applicable, mention next steps the student should take
+        - Highlight important deadlines or requirements mentioned in the context
+        - If applicable, mention next steps the student should take according to the context
         - End with a disclaimer that this information is not legal advice
 
         ## QUESTION
         {question}
         """)
-
-    def _create_llm_with_callbacks(self, callbacks=None):
-        """Create LLM with specified callbacks for streaming"""      
-
-        pipe = pipeline(
-            "text-generation", 
-            model = self.model, 
-            tokenizer = self.tokenizer, 
-            max_new_token = 512, 
-            repetition_penalty = 1.1, 
-            temperature = 0.1, # lower temperature for more deterministic responses
-            do_sample = True
-        )
-    
-        return HuggingFacePipeline(
-            pipeline = pipe, 
-            callbacks = callbacks, 
-        )
 
     async def add_documents(self, 
                       file_path: Union[str, List[str]], 
@@ -240,13 +222,11 @@ class OPTRagAssistant:
         start_time = time.time()
 
         try: 
-
             # Measure vector count updates 
             before_count = 0 
-            if hasattr(self.vector_store, "_index"):
-                before_count = self.vector_store._index.ntotal
+            if hasattr(self.vector_store, "index"):
+                before_count = self.vector_store.index.ntotal
             
-
             # call async process_documents 
             result = await process_documents(
                 source_path = file_path, 
@@ -255,8 +235,26 @@ class OPTRagAssistant:
                 chunk_size = chunk_size, 
                 chunk_overlap = chunk_overlap, 
             )
-
             
+            # Check status of document processing
+            if result.get("status") == "error":
+                return {
+                    "status": "error",
+                    "error": result.get("error", "Unknown error during document processing")
+                }
+            
+            # Extract processing information from result
+            document_count = result.get("document_count", 0)
+            chunk_count = result.get("chunk_count", 0)
+            
+            # Get the vector store from the result
+            vector_store = result.get("vector_store")
+            if vector_store is None:
+                return {
+                    "status": "error",
+                    "error": "No vector store returned from processing"
+                }
+                
             # Reload vector store after adding documents
             self.vector_store = load_vector_store(
                 vector_store_path=self.vector_store_path, 
@@ -266,19 +264,21 @@ class OPTRagAssistant:
 
             after_count = 0 
             # Update vector count metric 
-            if hasattr(self.vector_store, "_index"):
-                after_count = self.vector_store._index.ntotal
+            if hasattr(self.vector_store, "index"):
+                after_count = self.vector_store.index.ntotal
                 VECTOR_COUNT.set(after_count)
             
             processing_time = time.time() - start_time 
             logger.info(f"Documents added successfully in {processing_time:.2f} seconds")
 
+            vectors_added = after_count - before_count
+            
             return {
                 "status": "success", 
-                "document_processed": len(result.get("documents", [])),
-                "chunks_created": len(result.get("chunks", [])),
+                "documents_processed": document_count,
+                "chunks_created": chunk_count,
                 "processing_time": processing_time,
-                "vectors_added": after_count - before_count
+                "vectors_added": vectors_added
             }
         
         except Exception as e:
@@ -315,10 +315,10 @@ class OPTRagAssistant:
         """
         # This would require implementation in your vector_store.py
         # For now, we'll just return basic info
-        if hasattr(self.vector_store, '_index'):
+        if hasattr(self.vector_store, 'index'):
             return {
                 "status": "success",
-                "vector_count": self.vector_store._index.ntotal,
+                "vector_count": self.vector_store.index.ntotal,
                 "vector_store_path": str(self.vector_store_path)
             }
         return {
@@ -351,54 +351,76 @@ class OPTRagAssistant:
                 search_kwargs={"k": 5}  # Retrieve top 5 most relevant documents
             )
 
+            # Retrieve documents
+            retrieval_result = retriever.invoke(query)
+            docs = retrieval_result if isinstance(retrieval_result, list) else retrieval_result['documents']
+            
             # Measure retrieval time 
             VECTOR_RETRIEVAL_LATENCY.observe(time.time() - retrieval_start_time)
 
-            if stream: 
-                # Setup streaming
-                streaming_handler = StreamingCallbackHandler()
-                from langchain.callbacks.manager import CallbackManager
-                callbacks = CallbackManager([streaming_handler])
-                
-                # Create LLM with streaming
-                llm = self._create_llm_with_callbacks(callbacks=[callbacks])
-                
-                # Create chain
-                combine_docs_chain = create_stuff_documents_chain(
-                    llm=llm,
-                    prompt=self.visa_prompt
-                )
-                
-                chain = create_retrieval_chain(
-                    retriever=retriever,
-                    combine_docs_chain=combine_docs_chain
-                )
-                
-                # Execute the chain
-                response = chain.invoke({"question": query})
-                
-                # Add streaming info to response
-                response["streaming_handler"] = streaming_handler
+            # Format documents for context
+            context = "\n\n".join([doc.page_content for doc in docs])
             
-
+            # Create prompt from template
+            prompt_text = self.visa_prompt.format(
+                question=query,
+                context=context
+            )
+            
+            # Tokenize the input
+            inputs = self.tokenizer(prompt_text, return_tensors="pt")
+            input_ids = inputs["input_ids"].to(self.model.device)
+            attention_mask = inputs["attention_mask"].to(self.model.device)
+            
+            # Generate the response directly using the model
+            if stream:
+                # Use streaming mode (handled by astream_response method)
+                # This branch should not normally be taken, but is here for completeness
+                streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True, skip_prompt=True)
+                
+                # Create generation kwargs
+                generation_kwargs = {
+                    "input_ids": input_ids,
+                    "attention_mask": attention_mask,
+                    "streamer": streamer,
+                    "max_new_tokens": 512,
+                    "do_sample": True,
+                    "temperature": 0.01,
+                    "repetition_penalty": 1.1,
+                }
+                
+                # Run generation in a separate thread
+                thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+                thread.start()
+                
+                # Collect all tokens
+                response_text = ""
+                for new_text in streamer:
+                    response_text += new_text
+                
+                # Ensure thread completes
+                thread.join()
+                
+                answer = response_text
             else:
-                # Create LLM without streaming
-                llm = self._create_llm_with_callbacks()
-                
-                # Create chain
-                combine_docs_chain = create_stuff_documents_chain(
-                    llm=llm,
-                    prompt=self.visa_prompt
+                # Generate without streaming
+                output = self.model.generate(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    max_new_tokens=512,
+                    do_sample=True,
+                    temperature=0.01,
+                    repetition_penalty=1.1,
                 )
                 
-                chain = create_retrieval_chain(
-                    retriever=retriever,
-                    combine_docs_chain=combine_docs_chain
-                )
-                
-                # Execute the chain
-                response = chain.invoke({"question": query})
-
+                # Decode the generated output, skipping the prompt
+                answer = self.tokenizer.decode(output[0][input_ids.shape[1]:], skip_special_tokens=True)
+            
+            # Create response dictionary
+            response = {
+                "answer": answer,
+                "source_documents": docs
+            }
 
             # Log performance metrics
             elapsed_time = time.time() - start_time
@@ -408,7 +430,6 @@ class OPTRagAssistant:
             # Add timing information to response
             response["processing_time"] = elapsed_time
             
-
             QUERY_COUNT.labels(status="completed", query_type="standard").inc()
 
             return response
@@ -419,7 +440,7 @@ class OPTRagAssistant:
             QUERY_COUNT.labels(status="error", query_type="standard").inc()
             logger.error(f"Error answering question: {e}")
             return {
-                "answer": "I'm encountered an error while processing your question. Please try again.", 
+                "answer": "I encountered an error while processing your question. Please try again.", 
                 "error": str(e)
             }
         
@@ -435,73 +456,72 @@ class OPTRagAssistant:
         """
         QUERY_COUNT.labels(status="started", query_type="streaming").inc()
         
-        # Create async queue for streaming
-        queue = asyncio.Queue()
-        
-        # Setup async streaming handler
-        streaming_handler = AsyncStreamingCallbackHandler(queue)
-        from langchain.callbacks.manager import AsyncCallbackManager
-        callbacks = AsyncCallbackManager([streaming_handler])
-
-        # Create chain with async streaming 
-
         try:
             start_time = time.time()
+            
+            # First yield to show we're processing
+            yield "Searching visa regulations...\n\n"
             
             # Process documents retrieval first (this isn't streamed)
             retriever = self.vector_store.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 5}
             )
-            docs = retriever.get_relevant_documents(query)
+            
+            # Use .invoke instead of get_relevant_documents
+            retrieval_result = retriever.invoke(query)
+            docs = retrieval_result if isinstance(retrieval_result, list) else retrieval_result['documents']
             
             # Format documents for context
             context = "\n\n".join([doc.page_content for doc in docs])
             
-            # Create LLM with streaming callbacks
-            llm = self._create_llm_with_callbacks(callbacks=[callbacks])
-            
-            # First token to show retrieval is complete
-            yield "Searching visa regulations...\n\n"
-            
-            # Start generation in background
-            task = asyncio.create_task(
-                llm.ainvoke(
-                    self.visa_prompt.format(
-                        question=query,
-                        context=context
-                    )
-                )
+            # Create prompt from template
+            prompt_text = self.visa_prompt.format(
+                question=query,
+                context=context
             )
-
-            # Stream tokens as they arrive
-            while True:
-                # Wait for new tokens with timeout
-                try:
-                    token = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    yield token
-                    queue.task_done()
-                except asyncio.TimeoutError:
-                    # Check if generation is complete
-                    if task.done():
-                        break
             
-            # Ensure task completes
-            await task
+            # Create a custom StreamingOutputCallback that yields tokens
+            # Set skip_prompt=True to skip the input prompt in the output
+            streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True, skip_prompt=True)
+            
+            # Tokenize the input
+            inputs = self.tokenizer(prompt_text, return_tensors="pt")
+            input_ids = inputs["input_ids"].to(self.model.device)
+            attention_mask = inputs["attention_mask"].to(self.model.device)
+            
+            # Create the generation kwargs
+            generation_kwargs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "streamer": streamer,
+                "max_new_tokens": 512,
+                "do_sample": True,
+                "temperature": 0.01,
+                "repetition_penalty": 1.1,
+            }
+            
+            # Run generation in a separate thread to avoid blocking
+            thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
+            thread.start()
+            
+            # Stream the output as it's generated
+            for new_text in streamer:
+                yield new_text
+            
+            # Ensure thread completes
+            thread.join()
             
             # Log performance metrics
             elapsed_time = time.time() - start_time
             logger.info(f"Streaming query processed in {elapsed_time:.2f} seconds")
             QUERY_LATENCY.observe(elapsed_time)
-
             QUERY_COUNT.labels(status="completed", query_type="streaming").inc()
 
         except Exception as e:
-
             # Track error properly 
-            QUERY_ERRORS.labels(error_type = type(e).__name__).inc()
+            QUERY_ERRORS.labels(error_type=type(e).__name__).inc()
             QUERY_COUNT.labels(status="error", query_type="streaming").inc()
-
             logger.error(f"Error streaming response: {e}")
             yield f"\n I'm sorry, an error occurred: {str(e)}"
         

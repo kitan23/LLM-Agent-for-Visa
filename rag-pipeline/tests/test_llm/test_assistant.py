@@ -147,8 +147,8 @@ class TestOPTRagAssistant:
             
             # Create a refreshed mock vector store for the reload
             refreshed_store = MagicMock()
-            refreshed_store._index = MagicMock()
-            refreshed_store._index.ntotal = 103  # Original 100 + 3 new chunks
+            refreshed_store.index = MagicMock()
+            refreshed_store.index.ntotal = 103  # Original 100 + 3 new chunks
             mock_load_store.return_value = refreshed_store
             
             assistant = OPTRagAssistant(

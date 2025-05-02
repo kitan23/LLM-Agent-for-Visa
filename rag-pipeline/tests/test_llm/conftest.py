@@ -44,9 +44,9 @@ def mock_vector_store():
     # Mock the as_retriever method
     retriever = MagicMock()
     vector_store.as_retriever.return_value = retriever
-    # Mock the _index attribute for vector count
-    vector_store._index = MagicMock()
-    vector_store._index.ntotal = 100
+    # Mock the index attribute for vector count
+    vector_store.index = MagicMock()
+    vector_store.index.ntotal = 100
     return vector_store
 
 @pytest.fixture
