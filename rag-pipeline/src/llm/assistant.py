@@ -17,10 +17,10 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
 from langchain_core.prompts import ChatPromptTemplate
 
-from .callbacks import AsyncStreamingCallbackHandler
-from ..utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
-from ..retriever.vector_store import load_vector_store, build_vector_store
-from ..document_processor.pipeline import process_documents
+from src.llm.callbacks import AsyncStreamingCallbackHandler
+from src.utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
+from src.retriever.vector_store import load_vector_store, build_vector_store
+from src.document_processor.pipeline import process_documents
 
 logger = logging.getLogger("opt_rag.assistant")
 
