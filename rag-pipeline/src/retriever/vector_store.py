@@ -139,6 +139,7 @@ def build_vector_store(
     chunks: List[str],
     vector_store_path: str,
     device: str,
+    force_rebuild: bool = False
 ) -> FAISS:
     """Build or load a vector store from document chunks.
     
@@ -156,6 +157,10 @@ def build_vector_store(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
         model_kwargs={'device': device}
     )
+
+    if not chunks:
+        logger.warning("No chunks provided. Returning dummy FAISS store.")
+        chunks = ["dummy text"]
     
     # Create or load vector store with caching
     return create_or_load_vector_store(

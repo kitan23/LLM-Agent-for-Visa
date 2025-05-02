@@ -60,6 +60,9 @@ async def process_documents(
         chunk_overlap = chunk_overlap
     )
 
+    if not chunks:
+        chunks = ["This is a dummy chunk."]
+
     # Build vector store
     vector_store = build_vector_store(
         chunks = chunks, 

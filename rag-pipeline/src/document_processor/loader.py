@@ -32,10 +32,16 @@ async def load_pdf_documents(source_path: Union[str, Path]) -> List[Document]:
     documents = []
     try:
         if source_path.is_file():
-            if source_path.suffix.lower() == '.pdf':
+            ext = source_path.suffix.lower()
+            if ext == '.pdf':
                 loader = PyPDFLoader(str(source_path))
                 documents = loader.load()
                 logger.info(f"Loaded {len(documents)} pages from {source_path.name}")
+            elif ext == '.txt':
+                with open(source_path, "r", encoding="utf-8") as f:
+                    text = f.read()
+                documents = [Document(page_content=text, metadata={"source": str(source_path)})]
+                logger.info(f"Loaded 1 document from {source_path.name}")
             else:
                 logger.warning(f"Unsupported file format: {source_path}")
         elif source_path.is_dir():

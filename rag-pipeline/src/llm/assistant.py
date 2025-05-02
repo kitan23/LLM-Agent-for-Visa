@@ -57,10 +57,7 @@ class OPTRagAssistant:
         # initialize components 
         self.tokenizer = self._load_tokenizer()
         self.model = self._load_model()
-        self.vector_store = load_vector_store(
-            vector_store_path = self.vector_store_path, 
-            device=self.device
-        )
+        self.vector_store = self._load_vector_store()
 
         # Store prompt template
         self.visa_prompt = self._create_prompt_template()
@@ -157,7 +154,7 @@ class OPTRagAssistant:
                 force_reload = False
             )
         
-        except FileNotFoundError:
+        except (FileNotFoundError, RuntimeError):
             logger.warning(f"Vector store not found at {self.vector_store_path}, creating new one")
             
             # Create directory if it doesn't exist
@@ -165,7 +162,7 @@ class OPTRagAssistant:
 
             # Return empty vector store 
             return build_vector_store(
-                chunks = [],
+                chunks = ["This is a dummy chunk."],
                 vector_store_path=self.vector_store_path,
                 device = self.device, 
             )
