@@ -16,13 +16,18 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
 from langchain_core.prompts import ChatPromptTemplate
+from opentelemetry import trace
 
 from src.llm.callbacks import AsyncStreamingCallbackHandler
 from src.utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
 from src.retriever.vector_store import load_vector_store, build_vector_store
 from src.document_processor.pipeline import process_documents
+from src.utils.tracing import get_tracer
 
 logger = logging.getLogger("opt_rag.assistant")
+
+# Get a tracer for this module
+tracer = get_tracer("opt_rag.assistant")
 
 
 class OPTRagAssistant: 
@@ -42,128 +47,137 @@ class OPTRagAssistant:
             vector_store_path: Path to FAISS vector store
             device: Device to use (cuda, mps, cpu, or None for auto-detection)
         """
-        start_time = time.time()
-        self.model_path = Path(model_path)
-        self.vector_store_path = Path(vector_store_path)
-        self.embedding_model_name = embedding_model_name
+        with tracer.start_as_current_span("initialize_opt_rag_assistant"):
+            start_time = time.time()
+            self.model_path = Path(model_path)
+            self.vector_store_path = Path(vector_store_path)
+            self.embedding_model_name = embedding_model_name
 
-        # Detect hardware if not specified
-        self.device = device or self._detect_hardware()
+            # Detect hardware if not specified
+            self.device = device or self._detect_hardware()
 
-        logger.info(f"Using device: {self.device}")
+            logger.info(f"Using device: {self.device}")
 
-        # initialize components 
-        self.tokenizer = self._load_tokenizer()
-        self.model = self._load_model()
-        self.vector_store = self._load_vector_store()
+            # initialize components 
+            self.tokenizer = self._load_tokenizer()
+            self.model = self._load_model()
+            self.vector_store = self._load_vector_store()
 
-        # Store prompt template
-        self.visa_prompt = self._create_prompt_template()
+            # Store prompt template
+            self.visa_prompt = self._create_prompt_template()
 
-        # Record load time 
-        load_time = time.time() - start_time
-        MODEL_LOAD_TIME.observe(load_time)
+            # Record load time 
+            load_time = time.time() - start_time
+            MODEL_LOAD_TIME.observe(load_time)
 
 
-        # Update vector count metric 
-        if hasattr(self.vector_store, "index"):
-            VECTOR_COUNT.set(self.vector_store.index.ntotal)
+            # Update vector count metric 
+            if hasattr(self.vector_store, "index"):
+                VECTOR_COUNT.set(self.vector_store.index.ntotal)
 
-        logger.info("OPT-RAG Assistant initialized successfully")
+            logger.info("OPT-RAG Assistant initialized successfully")
 
     def _detect_hardware(self) -> str:
         """Detect the hardware device to use for inference."""
-        if torch.backends.mps.is_available():
-            return "mps"
-        elif torch.cuda.is_available():
-            return "cuda"
-        else:
-            return "cpu"
+        with tracer.start_as_current_span("detect_hardware"):
+            if torch.backends.mps.is_available():
+                return "mps"
+            elif torch.cuda.is_available():
+                return "cuda"
+            else:
+                return "cpu"
     
     def _load_tokenizer(self):
         """Load the tokenizer."""
-        logger.info(f"Loading tokenizer from {self.model_path}")
+        with tracer.start_as_current_span("load_tokenizer") as span:
+            span.set_attribute("model_path", str(self.model_path))
+            logger.info(f"Loading tokenizer from {self.model_path}")
 
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"Model file not found at {self.model_path}")
-        
-        return AutoTokenizer.from_pretrained(self.model_path)
+            if not self.model_path.exists():
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+                raise FileNotFoundError(f"Model file not found at {self.model_path}")
+            
+            return AutoTokenizer.from_pretrained(self.model_path)
     
     def _load_model(self):
         """Load and configure the model."""
-        logger.info(f"Loading model from {self.model_path}")
+        with tracer.start_as_current_span("load_model") as span:
+            span.set_attribute("model_path", str(self.model_path))
+            span.set_attribute("device", self.device)
+            logger.info(f"Loading model from {self.model_path}")
 
-        try: 
-            if self.device == "cuda":
-                # NVIDIA GPU configuration with 4-bit quantization
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_quant_type="nf4"
-                )
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.model_path,
-                    device_map="auto",
-                    quantization_config=quantization_config
-                )
+            try: 
+                if self.device == "cuda":
+                    # NVIDIA GPU configuration with 4-bit quantization
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4"
+                    )
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.model_path,
+                        device_map="auto",
+                        quantization_config=quantization_config
+                    )
+                    
+                    # Compile for additional performance if supported
+                    if torch.__version__ >= "2.0.0":
+                        try:
+                            logger.info("Compiling model for optimized execution")
+                            model = torch.compile(model)
+                        except Exception as e:
+                            logger.warning(f"Model compilation failed, using uncompiled model: {e}")
+                    
+                    logger.info("Model loaded successfully")
+                    
+                elif self.device == "mps":
+                    # Apple Silicon configuration
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.model_path,
+                        device_map="auto",
+                        torch_dtype=torch.float16
+                    )
+                    
+                else:
+                    # CPU configuration - full precision
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.model_path,
+                        device_map="auto",
+                    )
                 
-                # Compile for additional performance if supported
-                if torch.__version__ >= "2.0.0":
-                    try:
-                        logger.info("Compiling model for optimized execution")
-                        model = torch.compile(model)
-                    except Exception as e:
-                        logger.warning(f"Model compilation failed, using uncompiled model: {e}")
-                
-                logger.info("Model loaded successfully")
-                
-            elif self.device == "mps":
-                # Apple Silicon configuration
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.model_path,
-                    device_map="auto",
-                    torch_dtype=torch.float16
-                )
-                
-            else:
-                # CPU configuration - 8-bit quantization for better memory usage
-                quantization_config = BitsAndBytesConfig(
-                    load_in_8bit=True
-                )
-                model = AutoModelForCausalLM.from_pretrained(
-                    self.model_path,
-                    device_map="auto",
-                    quantization_config=quantization_config
-                )
+                return model
             
-            return model
-        
-        except Exception as e:
-            logger.error(f"Failed to initialize model: {e}")
-            raise 
+            except Exception as e:
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+                span.record_exception(e)
+                logger.error(f"Failed to initialize model: {e}")
+                raise 
 
     
     def _load_vector_store(self):
         """Load the FAISS vector store if it exists, or create an empty one."""
-        try: 
-            return load_vector_store(
-                vector_store_path = self.vector_store_path,
-                device = self.device, 
-                force_reload = False
-            )
-        
-        except (FileNotFoundError, RuntimeError):
-            logger.warning(f"Vector store not found at {self.vector_store_path}, creating new one")
+        with tracer.start_as_current_span("load_vector_store") as span:
+            span.set_attribute("vector_store_path", str(self.vector_store_path))
+            try: 
+                return load_vector_store(
+                    vector_store_path = self.vector_store_path,
+                    device = self.device, 
+                    force_reload = False
+                )
             
-            # Create directory if it doesn't exist
-            self.vector_store_path.mkdir(parents=True, exist_ok=True)
+            except (FileNotFoundError, RuntimeError) as e:
+                span.set_attribute("creating_new_vector_store", True)
+                logger.warning(f"Vector store not found at {self.vector_store_path}, creating new one")
+                
+                # Create directory if it doesn't exist
+                self.vector_store_path.mkdir(parents=True, exist_ok=True)
 
-            # Return empty vector store 
-            return build_vector_store(
-                chunks = ["This is a dummy chunk."],
-                vector_store_path=self.vector_store_path,
-                device = self.device, 
-            )
+                # Return empty vector store 
+                return build_vector_store(
+                    chunks = ["This is a dummy chunk."],
+                    vector_store_path=self.vector_store_path,
+                    device = self.device, 
+                )
         
     def _create_prompt_template(self):
         """Create prompt template for visa assistance."""
@@ -199,331 +213,394 @@ class OPTRagAssistant:
         {question}
         """)
 
-    async def add_documents(self, 
-                      file_path: Union[str, List[str]], 
-                      document_type: Optional[str] = None, 
-                      chunk_size: int = 1000, 
-                      chunk_overlap: int = 200 
-                      ) -> Dict[str, Any]:
+    async def add_documents(
+        self, 
+        file_path: Union[str, List[str]], 
+        document_type: Optional[str] = None, 
+        chunk_size: int = 1000, 
+        chunk_overlap: int = 200 
+    ) -> Dict[str, Any]:
         """Add documents to the vector store.
-
-
-        Args: 
-            file_path: Path to the document file or list of file paths
-            document_type: Type of document (e.g., "policy", "faq", "news")
-            chunk_size: Number of characters per chunk
-            chunk_overlap: Number of characters to overlap between chunks
-
-        Returns: 
-            Dictionary containing the number of chunks added and the total number of chunks in the vector store
+        
+        Args:
+            file_path: Path to the file or list of file paths
+            document_type: Optional type of document for metadata
+            chunk_size: Size of text chunks
+            chunk_overlap: Overlap between chunks
+            
+        Returns:
+            Dictionary with information about the added documents
         """
-
-        logger.info(f"Adding documents from {file_path}")
-        start_time = time.time()
-
-        try: 
-            # Measure vector count updates 
-            before_count = 0 
-            if hasattr(self.vector_store, "index"):
-                before_count = self.vector_store.index.ntotal
-            
-            # call async process_documents 
-            result = await process_documents(
-                source_path = file_path, 
-                vector_store_path = self.vector_store_path, 
-                device = self.device, 
-                chunk_size = chunk_size, 
-                chunk_overlap = chunk_overlap, 
-            )
-            
-            # Check status of document processing
-            if result.get("status") == "error":
+        with tracer.start_as_current_span("add_documents") as span:
+            try:
+                # Convert to list if a single path
+                if isinstance(file_path, str):
+                    file_path = [file_path]
+                
+                span.set_attribute("num_documents", len(file_path))
+                span.set_attribute("document_type", document_type or "unknown")
+                
+                start_time = time.time()
+                
+                # Process documents
+                processed_info = await process_documents(
+                    file_paths=file_path, 
+                    chunk_size=chunk_size, 
+                    chunk_overlap=chunk_overlap,
+                    document_type=document_type
+                )
+                
+                # If no chunks were generated, return error
+                if not processed_info["chunks"]:
+                    span.set_status(trace.Status(trace.StatusCode.ERROR))
+                    span.set_attribute("error", "No chunks generated")
+                    return {"status": "error", "message": "No chunks were generated from the documents"}
+                
+                # Get chunks and metadata
+                chunks = processed_info["chunks"]
+                metadata_list = processed_info["metadata"]
+                document_ids = processed_info["document_ids"]
+                
+                # Add to vector store
+                self.vector_store = build_vector_store(
+                    chunks=chunks,
+                    vector_store_path=self.vector_store_path,
+                    device=self.device,
+                    existing_store=self.vector_store,
+                    metadata_list=metadata_list
+                )
+                
+                # Update vector count metric
+                if hasattr(self.vector_store, "index"):
+                    VECTOR_COUNT.set(self.vector_store.index.ntotal)
+                
+                processing_time = time.time() - start_time
+                
+                # Create response
                 return {
-                    "status": "error",
-                    "error": result.get("error", "Unknown error during document processing")
-                }
-            
-            # Extract processing information from result
-            document_count = result.get("document_count", 0)
-            chunk_count = result.get("chunk_count", 0)
-            
-            # Get the vector store from the result
-            vector_store = result.get("vector_store")
-            if vector_store is None:
-                return {
-                    "status": "error",
-                    "error": "No vector store returned from processing"
+                    "status": "success",
+                    "document_ids": document_ids,
+                    "document_count": len(file_path),
+                    "chunk_count": len(chunks),
+                    "processing_time": processing_time
                 }
                 
-            # Reload vector store after adding documents
-            self.vector_store = load_vector_store(
-                vector_store_path=self.vector_store_path, 
-                device=self.device, 
-                force_reload=True
-            )
-
-            after_count = 0 
-            # Update vector count metric 
-            if hasattr(self.vector_store, "index"):
-                after_count = self.vector_store.index.ntotal
-                VECTOR_COUNT.set(after_count)
-            
-            processing_time = time.time() - start_time 
-            logger.info(f"Documents added successfully in {processing_time:.2f} seconds")
-
-            vectors_added = after_count - before_count
-            
-            return {
-                "status": "success", 
-                "documents_processed": document_count,
-                "chunks_created": chunk_count,
-                "processing_time": processing_time,
-                "vectors_added": vectors_added
-            }
-        
-        except Exception as e:
-            logger.error(f"Error adding documents: {e}")
-            return {
-                "status": "error", 
-                "error": str(e)
-            }
-            
+            except Exception as e:
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+                span.record_exception(e)
+                logger.error(f"Failed to add documents: {e}")
+                return {"status": "error", "message": str(e)}
+    
     def remove_documents(self, document_ids: List[str]) -> Dict[str, Any]:
         """Remove documents from the vector store.
         
-        Args: 
+        Args:
             document_ids: List of document IDs to remove
-
-        Returns:
-            Dictionary with processing information
-        """
-
-        # This would require implementation in your vector_store.py
-        # For now, we'll just log that this isn't implemented
-        logger.warning("Document removal not implemented yet")
-        return {
-            "status": "error",
-            "error": "Document removal not implemented yet"
-        }
-
             
+        Returns:
+            Dictionary with status and information
+        """
+        with tracer.start_as_current_span("remove_documents") as span:
+            span.set_attribute("document_ids", str(document_ids))
+            # Not implemented yet
+            return {"status": "error", "message": "Document removal not implemented yet"}
+    
     def list_documents(self) -> Dict[str, Any]:
-        """List all documents in the vector store.
+        """List documents in the vector store.
         
         Returns:
             Dictionary with document information
         """
-        # This would require implementation in your vector_store.py
-        # For now, we'll just return basic info
-        if hasattr(self.vector_store, 'index'):
+        with tracer.start_as_current_span("list_documents"):
+            # Get documents from vector store
+            documents = []
+            document_count = 0
+            
+            if hasattr(self.vector_store, "docstore"):
+                document_count = len(self.vector_store.docstore._dict)
+                
+                # Extract unique documents (removing chunks)
+                unique_docs = {}
+                for doc_id, doc in self.vector_store.docstore._dict.items():
+                    if hasattr(doc, "metadata") and "source" in doc.metadata:
+                        doc_source = doc.metadata["source"]
+                        if doc_source not in unique_docs:
+                            unique_docs[doc_source] = {
+                                "source": doc_source,
+                                "document_type": doc.metadata.get("document_type", "unknown"),
+                                "chunk_count": 0
+                            }
+                        unique_docs[doc_source]["chunk_count"] += 1
+                
+                documents = list(unique_docs.values())
+
             return {
                 "status": "success",
-                "vector_count": self.vector_store.index.ntotal,
-                "vector_store_path": str(self.vector_store_path)
+                "document_count": len(documents),
+                "total_chunks": document_count,
+                "documents": documents
             }
-        return {
-            "status": "success",
-            "vector_count": 0,
-            "vector_store_path": str(self.vector_store_path)
-        }   
     
-
     def answer_question(self, query: str, stream: bool = False) -> Dict[str, Any]:
-        """Process a user query and return a response with relevant context.
+        """Answer a question using the RAG pipeline.
         
         Args:
-            query: User's question about visa matters
+            query: User's question
             stream: Whether to stream the response
             
         Returns:
-            Dict containing the answer and retrieved documents
+            Dictionary with the answer and processing time
         """
-        logger.info(f"Processing query: {query}")
-        QUERY_COUNT.labels(status="started", query_type="standard").inc()
-        
-        try:
+        with tracer.start_as_current_span("answer_question") as span:
+            span.set_attribute("query", query)
+            span.set_attribute("stream", stream)
+            
             start_time = time.time()
-
-            # Create retriever
-            retrieval_start_time = time.time()
-            retriever = self.vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 5}  # Retrieve top 5 most relevant documents
-            )
-
-            # Retrieve documents
-            retrieval_result = retriever.invoke(query)
-            docs = retrieval_result if isinstance(retrieval_result, list) else retrieval_result['documents']
+            status = "success"
+            error_type = None
             
-            # Measure retrieval time 
-            VECTOR_RETRIEVAL_LATENCY.observe(time.time() - retrieval_start_time)
-
-            # Format documents for context
-            context = "\n\n".join([doc.page_content for doc in docs])
-            
-            # Create prompt from template
-            prompt_text = self.visa_prompt.format(
-                question=query,
-                context=context
-            )
-            
-            # Tokenize the input
-            inputs = self.tokenizer(prompt_text, return_tensors="pt")
-            input_ids = inputs["input_ids"].to(self.model.device)
-            attention_mask = inputs["attention_mask"].to(self.model.device)
-            
-            # Generate the response directly using the model
-            if stream:
-                # Use streaming mode (handled by astream_response method)
-                # This branch should not normally be taken, but is here for completeness
-                streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True, skip_prompt=True)
+            try:
+                # Record query count (starting)
+                QUERY_COUNT.labels(status="started", query_type="standard").inc()
                 
-                # Create generation kwargs
-                generation_kwargs = {
-                    "input_ids": input_ids,
-                    "attention_mask": attention_mask,
-                    "streamer": streamer,
-                    "max_new_tokens": 512,
-                    "do_sample": True,
-                    "temperature": 0.01,
-                    "repetition_penalty": 1.1,
+                # Retrieve relevant context
+                with tracer.start_as_current_span("retrieve_context"):
+                    retrieval_start = time.time()
+                    
+                    if hasattr(self.vector_store, "similarity_search"):
+                        results = self.vector_store.similarity_search(query, k=4)
+                        context = "\n\n".join([doc.page_content for doc in results])
+                    else:
+                        # No documents in the vector store
+                        context = "No relevant documentation is available."
+                        
+                    # Record vector retrieval time
+                    retrieval_time = time.time() - retrieval_start
+                    VECTOR_RETRIEVAL_LATENCY.observe(retrieval_time)
+                    span.set_attribute("retrieval_time", retrieval_time)
+                
+                # Prepare prompt with context and question
+                with tracer.start_as_current_span("prepare_prompt"):
+                    prompt = self.visa_prompt.format(
+                        context=context,
+                        question=query
+                    )
+                    messages = [{"role": "user", "content": prompt}]
+                    
+                # Generate LLM response
+                with tracer.start_as_current_span("generate_answer") as gen_span:
+                    gen_span.set_attribute("model_name", str(self.model_path).split('/')[-1])
+                    
+                    if stream:
+                        # Streaming response
+                        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+                        gen_thread = threading.Thread(
+                            target=self._generate_response,
+                            args=(messages, streamer)
+                        )
+                        gen_thread.start()
+                        
+                        response_text = ""
+                        for response_chunk in streamer:
+                            response_text += response_chunk
+                            
+                    else:
+                        # Standard response
+                        inputs = self.tokenizer.apply_chat_template(
+                            messages,
+                            add_generation_prompt=True,
+                            return_tensors="pt"
+                        ).to(self.device)
+                        
+                        outputs = self.model.generate(
+                            inputs,
+                            max_new_tokens=1024,
+                            temperature=0.7,
+                            top_p=0.9,
+                            repetition_penalty=1.1,
+                            do_sample=True
+                        )
+                        
+                        response_text = self.tokenizer.decode(
+                            outputs[0][inputs.shape[1]:],
+                            skip_special_tokens=True
+                        )
+                
+                # Calculate total processing time
+                processing_time = time.time() - start_time
+                
+                # Record metrics
+                QUERY_LATENCY.observe(processing_time)
+                QUERY_COUNT.labels(status="success", query_type="standard").inc()
+                
+                # Add processing time to the span
+                span.set_attribute("processing_time", processing_time)
+                
+                # Return result
+                return {
+                    "answer": response_text,
+                    "processing_time": processing_time
                 }
                 
-                # Run generation in a separate thread
-                thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
-                thread.start()
+            except Exception as e:
+                # Record failure
+                status = "error"
+                error_type = type(e).__name__
                 
-                # Collect all tokens
-                response_text = ""
-                for new_text in streamer:
-                    response_text += new_text
+                # Update span with error info
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+                span.record_exception(e)
                 
-                # Ensure thread completes
-                thread.join()
+                # Log error
+                logger.error(f"Error processing query: {e}")
                 
-                answer = response_text
-            else:
-                # Generate without streaming
-                output = self.model.generate(
-                    input_ids,
-                    attention_mask=attention_mask,
-                    max_new_tokens=512,
-                    do_sample=True,
-                    temperature=0.01,
-                    repetition_penalty=1.1,
-                )
+                # Record metrics
+                processing_time = time.time() - start_time
+                QUERY_LATENCY.observe(processing_time)
+                QUERY_COUNT.labels(status="error", query_type="standard").inc()
+                QUERY_ERRORS.labels(error_type=error_type).inc()
                 
-                # Decode the generated output, skipping the prompt
-                answer = self.tokenizer.decode(output[0][input_ids.shape[1]:], skip_special_tokens=True)
-            
-            # Create response dictionary
-            response = {
-                "answer": answer,
-                "source_documents": docs
-            }
+                # Return error response
+                return {
+                    "answer": f"I encountered an error while processing your query: {str(e)}",
+                    "error": str(e),
+                    "processing_time": processing_time
+                }
 
-            # Log performance metrics
-            elapsed_time = time.time() - start_time
-            logger.info(f"Query processed in {elapsed_time:.2f} seconds")
-            QUERY_LATENCY.observe(elapsed_time)
-            
-            # Add timing information to response
-            response["processing_time"] = elapsed_time
-            
-            QUERY_COUNT.labels(status="completed", query_type="standard").inc()
-
-            return response
-
-        except Exception as e:
-            # Track error properly 
-            QUERY_ERRORS.labels(error_type = type(e).__name__).inc()
-            QUERY_COUNT.labels(status="error", query_type="standard").inc()
-            logger.error(f"Error answering question: {e}")
-            return {
-                "answer": "I encountered an error while processing your question. Please try again.", 
-                "error": str(e)
-            }
+    def _generate_response(self, messages, streamer):
+        """Helper method to generate response with a streamer."""
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt"
+        ).to(self.device)
         
+        self.model.generate(
+            inputs,
+            max_new_tokens=1024,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            do_sample=True,
+            streamer=streamer
+        )
 
     async def astream_response(self, query: str) -> AsyncIterator[str]:
-        """Stream response asynchronously for use with FastAPI.
+        """Stream response to a question asynchronously.
         
         Args:
-            query: User's question about visa matters
+            query: User's question
             
         Yields:
-            Tokens as they're generated
+            Response tokens as they are generated
         """
-        QUERY_COUNT.labels(status="started", query_type="streaming").inc()
-        
-        try:
+        with tracer.start_as_current_span("astream_response") as span:
+            span.set_attribute("query", query)
+            
             start_time = time.time()
+            status = "success"
+            error_type = None
             
-            # First yield to show we're processing
-            yield "Searching visa regulations...\n\n"
-            
-            # Process documents retrieval first (this isn't streamed)
-            retriever = self.vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={"k": 5}
-            )
-            
-            # Use .invoke instead of get_relevant_documents
-            retrieval_result = retriever.invoke(query)
-            docs = retrieval_result if isinstance(retrieval_result, list) else retrieval_result['documents']
-            
-            # Format documents for context
-            context = "\n\n".join([doc.page_content for doc in docs])
-            
-            # Create prompt from template
-            prompt_text = self.visa_prompt.format(
-                question=query,
-                context=context
-            )
-            
-            # Create a custom StreamingOutputCallback that yields tokens
-            # Set skip_prompt=True to skip the input prompt in the output
-            streamer = TextIteratorStreamer(self.tokenizer, skip_special_tokens=True, skip_prompt=True)
-            
-            # Tokenize the input
-            inputs = self.tokenizer(prompt_text, return_tensors="pt")
-            input_ids = inputs["input_ids"].to(self.model.device)
-            attention_mask = inputs["attention_mask"].to(self.model.device)
-            
-            # Create the generation kwargs
-            generation_kwargs = {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "streamer": streamer,
-                "max_new_tokens": 512,
-                "do_sample": True,
-                "temperature": 0.01,
-                "repetition_penalty": 1.1,
-            }
-            
-            # Run generation in a separate thread to avoid blocking
-            thread = threading.Thread(target=self.model.generate, kwargs=generation_kwargs)
-            thread.start()
-            
-            # Stream the output as it's generated
-            for new_text in streamer:
-                yield new_text
-            
-            # Ensure thread completes
-            thread.join()
-            
-            # Log performance metrics
-            elapsed_time = time.time() - start_time
-            logger.info(f"Streaming query processed in {elapsed_time:.2f} seconds")
-            QUERY_LATENCY.observe(elapsed_time)
-            QUERY_COUNT.labels(status="completed", query_type="streaming").inc()
+            try:
+                # Record query count (starting)
+                QUERY_COUNT.labels(status="started", query_type="streaming").inc()
+                
+                # Create callback handler for streaming
+                callback_handler = AsyncStreamingCallbackHandler()
+                
+                # Retrieve relevant context
+                with tracer.start_as_current_span("retrieve_context"):
+                    retrieval_start = time.time()
+                    
+                    if hasattr(self.vector_store, "similarity_search"):
+                        results = self.vector_store.similarity_search(query, k=4)
+                        context = "\n\n".join([doc.page_content for doc in results])
+                    else:
+                        # No documents in the vector store
+                        context = "No relevant documentation is available."
+                        
+                    # Record vector retrieval time
+                    retrieval_time = time.time() - retrieval_start
+                    VECTOR_RETRIEVAL_LATENCY.observe(retrieval_time)
+                    span.set_attribute("retrieval_time", retrieval_time)
+                
+                # Prepare prompt with context and question
+                with tracer.start_as_current_span("prepare_prompt"):
+                    prompt = self.visa_prompt.format(
+                        context=context,
+                        question=query
+                    )
+                    messages = [{"role": "user", "content": prompt}]
+                
+                # Generate streaming response
+                with tracer.start_as_current_span("generate_streaming_answer"):
+                    # Stream generation using asyncio
+                    stream_task = asyncio.create_task(self._agenerate_with_callback(messages, callback_handler))
+                    
+                    # Yield tokens as they are generated
+                    async for token in callback_handler.aiter():
+                        yield token
+                        
+                    # Wait for generation to complete
+                    await stream_task
+                
+                # Record metrics
+                processing_time = time.time() - start_time
+                QUERY_LATENCY.observe(processing_time)
+                QUERY_COUNT.labels(status="success", query_type="streaming").inc()
+                
+                # Add processing time to the span
+                span.set_attribute("processing_time", processing_time)
+                
+            except Exception as e:
+                # Record failure
+                status = "error"
+                error_type = type(e).__name__
+                
+                # Update span with error info
+                span.set_status(trace.Status(trace.StatusCode.ERROR))
+                span.record_exception(e)
+                
+                # Log error
+                logger.error(f"Error processing streaming query: {e}")
+                
+                # Record metrics
+                processing_time = time.time() - start_time
+                QUERY_LATENCY.observe(processing_time)
+                QUERY_COUNT.labels(status="error", query_type="streaming").inc()
+                QUERY_ERRORS.labels(error_type=error_type).inc()
+                
+                # Yield error message
+                yield f"Error: {str(e)}"
 
-        except Exception as e:
-            # Track error properly 
-            QUERY_ERRORS.labels(error_type=type(e).__name__).inc()
-            QUERY_COUNT.labels(status="error", query_type="streaming").inc()
-            logger.error(f"Error streaming response: {e}")
-            yield f"\n I'm sorry, an error occurred: {str(e)}"
+    async def _agenerate_with_callback(self, messages, callback_handler):
+        """Generate response with callback handler asynchronously."""
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            return_tensors="pt"
+        ).to(self.device)
         
+        # Create a separate thread for generation
+        generation_task = asyncio.get_event_loop().run_in_executor(
+            None,
+            self._generate_with_callback,
+            inputs,
+            callback_handler
+        )
+        
+        await generation_task
+        
+    def _generate_with_callback(self, inputs, callback_handler):
+        """Run model generation with callback in a separate thread."""
+        self.model.generate(
+            inputs,
+            max_new_tokens=1024,
+            temperature=0.7,
+            top_p=0.9,
+            repetition_penalty=1.1,
+            do_sample=True,
+            streamer=callback_handler
+        )
 
 

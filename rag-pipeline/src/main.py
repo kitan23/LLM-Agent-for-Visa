@@ -20,6 +20,7 @@ from src.llm.assistant import OPTRagAssistant
 from src.utils.logging import setup_logging
 from src.utils.metrics import initialize_metrics, APP_INFO
 from src.utils.config import Settings, get_settings
+from src.utils.tracing import setup_jaeger_tracing, get_tracer
 
 # Configure logging 
 setup_logging()
@@ -47,8 +48,15 @@ app.add_middleware(
 
 settings = get_settings()
 
+# Setup Jaeger tracing
+service_name = "opt-rag-service"
+logger.info(f"Setting up tracing for service: {service_name}")
+tracer_provider = setup_jaeger_tracing(app, service_name=service_name)
+logger.info("Tracing setup complete")
+
 # Add OpenTelemetry instrumentation 
-FastAPIInstrumentor.instrument_app(app)
+# Note: We don't need this line as FastAPIInstrumentor is already initialized in setup_jaeger_tracing
+# FastAPIInstrumentor.instrument_app(app)
 
 # Add metrics endpoint using Prometheus ASGI app
 metrics_app = make_asgi_app()
@@ -99,13 +107,16 @@ async def query_post(request: QueryRequest):
     if not assistant: 
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    logger.info(f"Received query: {request.question}")
-    result = assistant.answer_question(request.question)
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query_post_operation"):
+        logger.info(f"Received query: {request.question}")
+        result = assistant.answer_question(request.question)
 
-    return {
-        "answer": result["answer"], 
-        "processing_time": result["processing_time"]
-    }
+        return {
+            "answer": result["answer"], 
+            "processing_time": result["processing_time"]
+        }
 
 @app.get("/query", response_model=Dict[str, Any])
 async def query_get(q: str = Query(..., description="Query text")):
@@ -113,8 +124,11 @@ async def query_get(q: str = Query(..., description="Query text")):
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    logger.info(f"Received query: {q}")
-    return assistant.answer_question(q)
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("query_get_operation"):
+        logger.info(f"Received query: {q}")
+        return assistant.answer_question(q)
 
 @app.post("/api/query/stream")
 async def stream_query_post(request: QueryRequest):
@@ -122,17 +136,20 @@ async def stream_query_post(request: QueryRequest):
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    logger.info(f"Received streaming query: {request.question}")
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("stream_query_post_operation"):
+        logger.info(f"Received streaming query: {request.question}")
 
-    async def generate():
-        async for token in assistant.astream_response(request.question):
-            yield f"data: {token}\n\n"
-        yield "data: [DONE]\n\n"
+        async def generate():
+            async for token in assistant.astream_response(request.question):
+                yield f"data: {token}\n\n"
+            yield "data: [DONE]\n\n"
     
-    return StreamingResponse(
-        generate(), 
-        media_type="text/event-stream"
-    )
+        return StreamingResponse(
+            generate(), 
+            media_type="text/event-stream"
+        )
 
 @app.get("/stream")
 async def stream_query_get(q: str = Query(..., description="Query text")):
@@ -140,12 +157,15 @@ async def stream_query_get(q: str = Query(..., description="Query text")):
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    logger.info(f"Received streaming query: {q}")
-    
-    return StreamingResponse(
-        assistant.astream_response(q),
-        media_type="text/event-stream"
-    )
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("stream_query_get_operation"):
+        logger.info(f"Received streaming query: {q}")
+        
+        return StreamingResponse(
+            assistant.astream_response(q),
+            media_type="text/event-stream"
+        )
 
 @app.post("/documents", response_model=Dict[str, Any])
 async def add_documents(document_paths: List[str], document_type: Optional[str] = None):
@@ -153,11 +173,14 @@ async def add_documents(document_paths: List[str], document_type: Optional[str] 
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    result = await assistant.add_documents(
-        file_path=document_paths,
-        document_type=document_type
-    )
-    return result
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("add_documents_operation"):
+        result = await assistant.add_documents(
+            file_path=document_paths,
+            document_type=document_type
+        )
+        return result
 
 @app.get("/documents", response_model=Dict[str, Any])
 async def list_documents():
@@ -165,7 +188,10 @@ async def list_documents():
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    return assistant.list_documents()
+    # Create a span for this operation
+    tracer = get_tracer()
+    with tracer.start_as_current_span("list_documents_operation"):
+        return assistant.list_documents()
 
 @app.get("/metrics/summary", response_model=Dict[str, Any])
 async def metrics_summary():

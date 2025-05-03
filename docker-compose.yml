@@ -1,6 +1,60 @@
 version: '3'
 
 services:
+  # NGINX API Gateway
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"     # HTTP
+      - "443:443"   # HTTPS (for future use)
+    depends_on:
+      - api
+      - streamlit-ui
+    networks:
+      - opt-rag-network
+    volumes:
+      - ./nginx/logs:/var/log/nginx
+    restart: unless-stopped
+
+  # FastAPI Backend Service
+  api:
+    build:
+      context: ./rag-pipeline
+      dockerfile: Dockerfile
+    container_name: opt-rag-api
+    expose:
+      - "8000"
+    environment:
+      - MODEL_PATH=/app/models/qwen2.5-1.5b
+      - VECTOR_STORE_PATH=/app/vector_store
+      - DEVICE=cpu
+      - OTLP_ENDPOINT=http://jaeger:4317
+    volumes:
+      - ./rag-pipeline/models:/app/models
+      - ./rag-pipeline/vector_store:/app/vector_store
+    networks:
+      - opt-rag-network
+    restart: unless-stopped
+
+  # Streamlit UI
+  streamlit-ui:
+    build:
+      context: ./streamlit
+      dockerfile: Dockerfile
+    container_name: opt-rag-ui
+    expose:
+      - "8501"
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    networks:
+      - opt-rag-network
+    restart: unless-stopped
+
+  # Monitoring Services
   prometheus:
     image: prom/prometheus
     ports:
@@ -12,6 +66,8 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - opt-rag-network
 
   grafana:
     image: grafana/grafana
@@ -24,6 +80,30 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - opt-rag-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "6831:6831/udp"   # Jaeger Thrift compact protocol (agent)
+      - "6832:6832/udp"   # Jaeger Thrift binary protocol (agent)
+      - "5778:5778"       # Jaeger HTTP config server (agent)
+      - "16686:16686"     # Jaeger UI
+      - "14268:14268"     # Jaeger HTTP collector
+      - "14250:14250"     # Jaeger gRPC collector
+      - "4317:4317"       # OTLP gRPC
+      - "4318:4318"       # OTLP HTTP
+    environment:
+      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - opt-rag-network
 
 volumes:
-  grafana_data: 
+  grafana_data:
+
+# Define a custom network for all services
+networks:
+  opt-rag-network:
+    driver: bridge 
