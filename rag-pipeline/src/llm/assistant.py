@@ -233,8 +233,8 @@ class OPTRagAssistant:
         """
         with tracer.start_as_current_span("add_documents") as span:
             try:
+                # Convert to list if a single path else use the provided list
                 source_path = file_path if isinstance(file_path, list) else [file_path]
-                # Convert to list if a single path
                 if isinstance(file_path, str):
                     file_path = [file_path]
                 
