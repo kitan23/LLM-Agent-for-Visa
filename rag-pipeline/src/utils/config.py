@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # Model settings
-    model_path: str = "./models/qwen2.5-0.5b"
+    model_path: str = "./models/qwen2.5-1.5b"
     vector_store_path: str = "./vector_store"
     device: Optional[str] = None  # Auto-detect if None
     

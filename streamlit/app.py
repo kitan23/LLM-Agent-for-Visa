@@ -67,8 +67,75 @@ with st.sidebar:
         logger.error(f"Health check failed: {str(e)}")
         st.error(f"Cannot connect to API: {str(e)}")
 
+# Initialize uploaded documents list in session state if not present
+if "uploaded_documents" not in st.session_state:
+    st.session_state.uploaded_documents = []
+
+# Document uploader section
+st.header("Document Management")
+st.markdown("Upload official documents to enhance the knowledge base.")
+
+uploaded_file = st.file_uploader("Upload Immigration Document", type=["pdf", "txt", "docx"])
+
+if uploaded_file and st.button("Add Document"):
+    logger.info(f"Uploading document: {uploaded_file.name}")
+    # Save uploaded file temporarily
+    temp_dir = "temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    file_path = os.path.join(temp_dir, uploaded_file.name)
+    
+    with open(file_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    
+    # Call API to add document
+    try:
+        with st.spinner("Processing document..."):
+            # Create a multipart form with the file
+            files = {"file": (uploaded_file.name, open(file_path, "rb"), "application/octet-stream")}
+            form_data = {"document_type": "immigration"}
+            
+            # Send the request
+            response = requests.post(
+                f"{API_URL}/documents", 
+                files=files,
+                data=form_data,
+                timeout=60
+            )
+            
+            logger.info(f"Document upload response: {response.status_code}")
+            
+            if response.status_code == 200:
+                # Add document to session state
+                doc_info = {
+                    "source": uploaded_file.name,
+                    "document_type": "immigration",
+                    "timestamp": st.session_state.get("_timestamp", "")
+                }
+                st.session_state.uploaded_documents.append(doc_info)
+                st.success(f"Document added: {uploaded_file.name}")
+            else:
+                st.error(f"Error adding document: {response.text}")
+    except Exception as e:
+        logger.error(f"Upload failed: {str(e)}")
+        st.error(f"Error: {str(e)}")
+    finally:
+        # Clean up
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+# Document list
+st.subheader("Your Uploaded Documents")
+if st.session_state.uploaded_documents:
+    for doc in st.session_state.uploaded_documents:
+        st.markdown(f"- **{doc['source']}** ({doc['document_type']})")
+else:
+    st.info("No documents uploaded yet. Upload your first document above.")
+
+# Add a divider between document management and chat
+st.markdown("---")
+
 # Chat interface
-st.header("Ask Your Question")
+st.header("Chat with the Assistant")
 
 # Initialize chat history
 if "messages" not in st.session_state:
@@ -125,69 +192,6 @@ if prompt:
         except Exception as e:
             logger.error(f"Request failed: {str(e)}")
             message_placeholder.markdown(f"❌ Error: {str(e)}")
-
-# Document uploader section
-st.header("Document Management")
-st.markdown("Upload official documents to enhance the knowledge base.")
-
-uploaded_file = st.file_uploader("Upload Immigration Document", type=["pdf", "txt", "docx"])
-
-if uploaded_file and st.button("Add Document"):
-    logger.info(f"Uploading document: {uploaded_file.name}")
-    # Save uploaded file temporarily
-    temp_dir = "temp"
-    os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, uploaded_file.name)
-    
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    
-    # Call API to add document
-    try:
-        with st.spinner("Processing document..."):
-            # Create a multipart form with the file
-            files = {"file": (uploaded_file.name, open(file_path, "rb"), "application/octet-stream")}
-            form_data = {"document_type": "immigration"}
-            
-            # Send the request
-            response = requests.post(
-                f"{API_URL}/documents", 
-                files=files,
-                data=form_data,
-                timeout=60
-            )
-            
-            logger.info(f"Document upload response: {response.status_code}")
-            
-            if response.status_code == 200:
-                st.success(f"Document added: {uploaded_file.name}")
-            else:
-                st.error(f"Error adding document: {response.text}")
-    except Exception as e:
-        logger.error(f"Upload failed: {str(e)}")
-        st.error(f"Error: {str(e)}")
-    finally:
-        # Clean up
-        if os.path.exists(file_path):
-            os.remove(file_path)
-
-# Document list
-st.subheader("Current Documents")
-try:
-    logger.info(f"Fetching documents from {API_URL}/documents")
-    response = requests.get(f"{API_URL}/documents", timeout=10)
-    if response.status_code == 200:
-        documents = response.json().get("documents", [])
-        if documents:
-            for doc in documents:
-                st.markdown(f"- **{doc['source']}** ({doc['document_type']}) - {doc['chunk_count']} chunks")
-        else:
-            st.info("No documents in the system yet. Upload your first document above.")
-    else:
-        st.warning(f"Could not retrieve document list. Status: {response.status_code}")
-except Exception as e:
-    logger.error(f"Document list fetch failed: {str(e)}")
-    st.warning(f"Could not connect to API: {str(e)}")
 
 # Footer
 st.markdown("---")

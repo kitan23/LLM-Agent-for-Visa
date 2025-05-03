@@ -260,16 +260,19 @@ class OPTRagAssistant:
                 
                 # Get chunks and metadata
                 chunks = processed_info["chunks"]
-                metadata_list = processed_info["metadata"]
-                document_ids = processed_info["document_ids"]
+                metadata_list = None
+
+                import uuid
+
+                document_ids = [str(uuid.uuid4()) for _ in file_path]
                 
                 # Add to vector store
                 self.vector_store = build_vector_store(
                     chunks=chunks,
                     vector_store_path=self.vector_store_path,
                     device=self.device,
-                    existing_store=self.vector_store,
-                    metadata_list=metadata_list
+                    # existing_store=self.vector_store,
+                    # metadata_list=metadata_list
                 )
                 
                 # Update vector count metric
