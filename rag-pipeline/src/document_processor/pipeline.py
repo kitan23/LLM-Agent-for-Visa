@@ -47,8 +47,17 @@ async def process_documents(
     logger.info(f"Starting document processing pipeline from {source_path}")
     result = {"status": "success"}
 
-    # Load documents 
-    documents = await load_pdf_documents(source_path)
+    # If source_path is a list, load each file individually
+    if isinstance(source_path, list):
+        all_documents = []
+        for path in source_path:
+            docs = await load_pdf_documents(path)
+            all_documents.extend(docs)
+        documents = all_documents
+    else:
+        documents = await load_pdf_documents(source_path)
+
+    # If no documents were loaded, return an error
     if not documents: 
         logger.warning("No documents were loaded, aborting pipeline")
         return {"status": "error", "error": "No documents were loaded"}

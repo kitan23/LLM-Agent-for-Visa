@@ -9,12 +9,14 @@ import logging
 import os
 from typing import Dict, Any, Optional, List
 import uvicorn
-from fastapi import FastAPI, Request, Response, Query, BackgroundTasks
+from fastapi import FastAPI, Request, Response, Query, BackgroundTasks, File, UploadFile, Form
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, make_asgi_app
+import shutil
+from pathlib import Path
 
 from src.llm.assistant import OPTRagAssistant
 from src.utils.logging import setup_logging
@@ -168,19 +170,50 @@ async def stream_query_get(q: str = Query(..., description="Query text")):
         )
 
 @app.post("/documents", response_model=Dict[str, Any])
-async def add_documents(document_paths: List[str], document_type: Optional[str] = None):
-    """Add documents to the vector store."""
+async def add_documents(
+    file: UploadFile = File(...),
+    document_type: Optional[str] = Form(None)
+):
+    """Add a document to the vector store.
+    
+    This endpoint accepts file uploads via multipart/form-data.
+    """
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
     # Create a span for this operation
     tracer = get_tracer()
     with tracer.start_as_current_span("add_documents_operation"):
-        result = await assistant.add_documents(
-            file_path=document_paths,
-            document_type=document_type
-        )
-        return result
+        # Create temp directory if it doesn't exist
+        temp_dir = Path("temp")
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Save the uploaded file temporarily
+        file_path = temp_dir / file.filename
+        
+        try:
+            # Save uploaded file
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Process the document
+            logger.info(f"Processing uploaded document: {file.filename}")
+            result = await assistant.add_documents(
+                file_path=[str(file_path)],
+                document_type=document_type
+            )
+            
+            # Return success response
+            return result
+        
+        except Exception as e:
+            logger.error(f"Error processing document: {str(e)}")
+            return {"status": "error", "message": str(e)}
+        
+        finally:
+            # Clean up temporary file
+            if file_path.exists():
+                file_path.unlink()
 
 @app.get("/documents", response_model=Dict[str, Any])
 async def list_documents():

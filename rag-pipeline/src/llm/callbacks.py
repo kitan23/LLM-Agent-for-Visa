@@ -52,6 +52,20 @@ class AsyncStreamingCallbackHandler(BaseCallbackHandler):
         """Process new tokens as they are generated."""
         await self.queue.put(token)
         
+    async def aiter(self):
+        """Async iterator for tokens."""
+        while True:
+            try:
+                token = await asyncio.wait_for(self.queue.get(), timeout=30.0)
+                yield token
+                self.queue.task_done()
+            except asyncio.TimeoutError:
+                # If no tokens for 30 seconds, end streaming
+                break
+            except asyncio.CancelledError:
+                # Handle cancellation
+                break
+        
     def on_llm_new_token_sync(self, token: str, **kwargs: Any) -> None:
         """Synchronous fallback for token handling - needed for some LangChain versions."""
         # Use asyncio.run_coroutine_threadsafe or create_task in the running loop if available

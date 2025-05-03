@@ -233,6 +233,7 @@ class OPTRagAssistant:
         """
         with tracer.start_as_current_span("add_documents") as span:
             try:
+                source_path = file_path if isinstance(file_path, list) else [file_path]
                 # Convert to list if a single path
                 if isinstance(file_path, str):
                     file_path = [file_path]
@@ -244,10 +245,11 @@ class OPTRagAssistant:
                 
                 # Process documents
                 processed_info = await process_documents(
-                    file_paths=file_path, 
+                    source_path=source_path, 
+                    vector_store_path=self.vector_store_path,
+                    device=self.device,
                     chunk_size=chunk_size, 
                     chunk_overlap=chunk_overlap,
-                    document_type=document_type
                 )
                 
                 # If no chunks were generated, return error
@@ -506,7 +508,7 @@ class OPTRagAssistant:
                 QUERY_COUNT.labels(status="started", query_type="streaming").inc()
                 
                 # Create callback handler for streaming
-                callback_handler = AsyncStreamingCallbackHandler()
+                callback_handler = AsyncStreamingCallbackHandler(asyncio.Queue())
                 
                 # Retrieve relevant context
                 with tracer.start_as_current_span("retrieve_context"):
@@ -593,14 +595,34 @@ class OPTRagAssistant:
         
     def _generate_with_callback(self, inputs, callback_handler):
         """Run model generation with callback in a separate thread."""
-        self.model.generate(
-            inputs,
-            max_new_tokens=1024,
-            temperature=0.7,
-            top_p=0.9,
-            repetition_penalty=1.1,
-            do_sample=True,
-            streamer=callback_handler
-        )
+        try:
+            # Create a TextIteratorStreamer that works with the model
+            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+            
+            # Run the model generation with the streamer
+            self.model.generate(
+                inputs,
+                max_new_tokens=1024,
+                temperature=0.7,
+                top_p=0.9,
+                repetition_penalty=1.1,
+                do_sample=True,
+                    streamer=streamer
+                )
+            
+            # Process the streamer tokens and send them to our callback handler's queue directly
+            # This avoids asyncio.run() in a thread which can cause issues
+            for token in streamer:
+                # Put tokens directly in the queue without using asyncio.run
+                callback_handler.queue.put_nowait(token)
+                
+            # Signal end of generation
+            callback_handler.queue.put_nowait("")
+                
+        except Exception as e:
+            logger.error(f"Error in _generate_with_callback: {e}")
+            # Signal completion with error
+            callback_handler.queue.put_nowait(f"Error: {str(e)}")
+            callback_handler.queue.put_nowait("")  # Empty token to signal end
 
 
