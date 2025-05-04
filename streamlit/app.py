@@ -13,7 +13,7 @@ logger = logging.getLogger("streamlit-app")
 
 # API URL - either from environment variable or default to localhost
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
-logger.info(f"Using API URL: {API_URL}")
+# logger.info(f"Using API URL: {API_URL}")
 
 # Display the environment variables for debugging
 logger.info(f"Environment variables: {dict(os.environ)}")
