@@ -1,0 +1,83 @@
+# Default values for opt-rag chart
+# This is a YAML-formatted file.
+
+# Common settings
+nameOverride: ""
+fullnameOverride: ""
+
+# Image settings
+images:
+  registry: ""  # For local testing, leave empty; for GCP use "gcr.io/YOUR_PROJECT_ID"
+  backend:
+    repository: opt-rag-backend
+    tag: v1
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: opt-rag-frontend
+    tag: v1
+    pullPolicy: IfNotPresent
+  nginx:
+    repository: opt-rag-gateway
+    tag: v1
+    pullPolicy: IfNotPresent
+
+# Replica counts
+replicaCount:
+  backend: 1
+  frontend: 1
+  nginx: 1
+
+# Environment settings
+environment:
+  backend:
+    MODEL_PATH: "/app/models/qwen2.5-1.5b"
+    VECTOR_STORE_PATH: "/app/vector_store"
+    DEVICE: "cpu"
+    OTLP_ENDPOINT: "http://jaeger:4317"
+  frontend:
+    API_URL: "http://backend-service:8000"
+
+# Resource settings
+resources:
+  backend:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  frontend:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nginx:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Storage settings
+persistentVolume:
+  models:
+    size: 5Gi
+    storageClass: standard
+  vectorStore:
+    size: 1Gi
+    storageClass: standard
+
+# Service settings
+services:
+  backend:
+    type: NodePort  # Change to LoadBalancer for GCP
+    port: 8000
+  frontend:
+    type: NodePort  # Change to LoadBalancer for GCP
+    port: 8501
+  nginx:
+    type: NodePort  # Change to LoadBalancer for GCP
+    port: 80 

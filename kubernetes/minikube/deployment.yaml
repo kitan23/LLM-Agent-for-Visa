@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opt-rag-deployment
+  namespace: opt-rag
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opt-rag
+  template:
+    metadata:
+      labels:
+        app: opt-rag
+    spec:
+      containers:
+      - name: backend
+        image: opt-rag-backend:v1
+        ports:
+        - containerPort: 8000
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        env:
+        - name: MODEL_PATH
+          value: "/app/models/qwen2.5-1.5b"
+        - name: VECTOR_STORE_PATH
+          value: "/app/vector_store"
+        - name: DEVICE
+          value: "cpu"
+        - name: OTLP_ENDPOINT
+          value: "http://jaeger:4317"
+        volumeMounts:
+        - name: models-volume
+          mountPath: /app/models
+        - name: vector-store-volume
+          mountPath: /app/vector_store
+      - name: frontend
+        image: opt-rag-frontend:v1
+        ports:
+        - containerPort: 8501
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        env:
+        - name: API_URL
+          value: "http://backend-service:8000"
+      volumes:
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: models-pvc
+      - name: vector-store-volume
+        persistentVolumeClaim:
+          claimName: vector-store-pvc 

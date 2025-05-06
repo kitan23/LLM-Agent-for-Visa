@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: {{ .Release.Name }}-backend
+    component: backend
+spec:
+  replicas: {{ .Values.replicaCount.backend }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-backend
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-backend
+        component: backend
+    spec:
+      containers:
+      - name: backend
+        image: "{{ .Values.images.registry }}{{ .Values.images.backend.repository }}:{{ .Values.images.backend.tag }}"
+        imagePullPolicy: {{ .Values.images.backend.pullPolicy }}
+        ports:
+        - containerPort: 8000
+          name: http
+        resources:
+          requests:
+            cpu: {{ .Values.resources.backend.requests.cpu }}
+            memory: {{ .Values.resources.backend.requests.memory }}
+          limits:
+            cpu: {{ .Values.resources.backend.limits.cpu }}
+            memory: {{ .Values.resources.backend.limits.memory }}
+        env:
+        - name: MODEL_PATH
+          value: {{ .Values.environment.backend.MODEL_PATH }}
+        - name: VECTOR_STORE_PATH
+          value: {{ .Values.environment.backend.VECTOR_STORE_PATH }}
+        - name: DEVICE
+          value: {{ .Values.environment.backend.DEVICE }}
+        - name: OTLP_ENDPOINT
+          value: {{ .Values.environment.backend.OTLP_ENDPOINT }}
+        volumeMounts:
+        - name: models-volume
+          mountPath: /app/models
+        - name: vector-store-volume
+          mountPath: /app/vector_store
+      volumes:
+      - name: models-volume
+        persistentVolumeClaim:
+          claimName: models-pvc
+      - name: vector-store-volume
+        persistentVolumeClaim:
+          claimName: vector-store-pvc 

@@ -1,156 +1,187 @@
-# 📦 OPT-RAG Deployment Guide on Google Kubernetes Engine (GKE)
+# ☁️ Cloud Deployment Using Kubernetes (GKE Ready)
 
-This guide outlines step-by-step instructions to deploy the OPT-RAG backend (FastAPI + Qwen2.5 LLM + FAISS vector store) to Google Kubernetes Engine (GKE).
+## 📌 Overview
 
----
+This guide explains how to deploy the **OPT-RAG** project to a local Kubernetes cluster for development and testing, and then to **Google Kubernetes Engine (GKE)** for production. The deployment includes:
 
-## 🚧 Prerequisites
-
-1. **Install Required Tools**
-   ```bash
-   gcloud auth login
-   gcloud config set project <your-gcp-project-id>
-   gcloud components install kubectl
-   gcloud components install beta
-   ```
-
-2. **Enable Required APIs**
-   ```bash
-   gcloud services enable container.googleapis.com
-   gcloud services enable artifactregistry.googleapis.com
-   ```
-
-3. **Install Docker & Kubernetes**
-   - [Docker Desktop](https://www.docker.com/products/docker-desktop)
-   - [kubectl CLI](https://kubernetes.io/docs/tasks/tools/)
+* ✅ Containerizing backend (FastAPI), frontend (Streamlit), and API Gateway (NGINX)
+* ✅ Local deployment using **Minikube** for testing
+* ✅ Cloud deployment using **GKE** with autoscaling, persistent storage, and load balancers
+* ✅ Monitoring via Prometheus, Grafana, and Jaeger
+* ✅ CI/CD enabled via Jenkins
 
 ---
 
-## 🐳 Step 1: Build and Push Docker Image to Google Artifact Registry
+## 📁 Directory Context
 
-1. **Create Artifact Registry**
-   ```bash
-   gcloud artifacts repositories create opt-rag-backend        --repository-format=docker        --location=us-central1        --description="OPT-RAG backend container"
-   ```
+Your project structure is modular and well-suited for container orchestration:
 
-2. **Build Docker Image**
-   ```bash
-   docker build -t us-central1-docker.pkg.dev/<your-project-id>/opt-rag-backend/opt-rag:latest .
-   ```
-
-3. **Push Docker Image**
-   ```bash
-   docker push us-central1-docker.pkg.dev/<your-project-id>/opt-rag-backend/opt-rag:latest
-   ```
+* **rag-pipeline/** – FastAPI backend + vector store + LLM
+* **streamlit/** – UI frontend
+* **nginx/** – API gateway for routing
+* **grafana/**, **prometheus/**, **jaeger/** – Monitoring
+* **kubernetes/** – Organized Kubernetes manifests for `local/` and `cloud/`
 
 ---
 
-## ☸️ Step 2: Create GKE Cluster
+## 1. 📦 Build & Push Docker Images
+
+First, log in to Docker Hub:
 
 ```bash
-gcloud container clusters create opt-rag-cluster     --zone=us-central1-a     --num-nodes=3     --enable-autoscaling --min-nodes=1 --max-nodes=5     --enable-ip-alias
+docker login
 ```
+
+Then build and push each component:
 
 ```bash
-gcloud container clusters get-credentials opt-rag-cluster --zone us-central1-a
+# Backend
+cd rag-pipeline
+docker build -t your-dockerhub/opt-rag-backend:v1 .
+docker push your-dockerhub/opt-rag-backend:v1
+
+# Frontend
+cd ../streamlit
+docker build -t your-dockerhub/opt-rag-frontend:v1 .
+docker push your-dockerhub/opt-rag-frontend:v1
+
+# NGINX Gateway
+cd ../nginx
+docker build -t your-dockerhub/opt-rag-gateway:v1 .
+docker push your-dockerhub/opt-rag-gateway:v1
 ```
 
----
-
-## 📄 Step 3: Deploy Kubernetes Manifests
-
-### 1. `deployment.yaml`
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: opt-rag
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: opt-rag
-  template:
-    metadata:
-      labels:
-        app: opt-rag
-    spec:
-      containers:
-      - name: opt-rag-container
-        image: us-central1-docker.pkg.dev/<your-project-id>/opt-rag-backend/opt-rag:latest
-        ports:
-        - containerPort: 8000
-        volumeMounts:
-        - name: faiss-data
-          mountPath: /app/vector_store
-      volumes:
-      - name: faiss-data
-        persistentVolumeClaim:
-          claimName: faiss-pvc
-```
-
-### 2. `service.yaml`
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: opt-rag-service
-spec:
-  type: LoadBalancer
-  selector:
-    app: opt-rag
-  ports:
-    - protocol: TCP
-      port: 80
-      targetPort: 8000
-```
-
-### 3. `pvc.yaml`
-
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: faiss-pvc
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 1Gi
-```
-
----
-
-## 🚀 Deploy to Kubernetes
+Optionally push monitoring components:
 
 ```bash
-kubectl apply -f pvc.yaml
-kubectl apply -f deployment.yaml
-kubectl apply -f service.yaml
+cd ../grafana
+... (repeat for prometheus and jaeger)
 ```
 
 ---
 
-## 🌍 Access Your Backend
+## 2. 🧪 Local Deployment with Minikube
+
+### 📥 Prerequisites
+
+Install:
+
+* [kubectl](https://kubernetes.io/docs/tasks/tools/)
+* [minikube](https://minikube.sigs.k8s.io/docs/start/)
+* [helm](https://helm.sh/docs/intro/install/)
+
+### 🏗️ Start Cluster
 
 ```bash
-kubectl get service opt-rag-service
+minikube start --cpus=4 --memory=7168
 ```
 
-Copy the external IP, and access your FastAPI docs at:
+### 🛠️ Apply Manifests
+
+```bash
+kubectl create namespace opt-rag
+cd kubernetes/local
+kubectl apply -f backend.yaml
+kubectl apply -f frontend.yaml
+kubectl apply -f ingress.yaml
+kubectl apply -f monitoring.yaml
 ```
-http://<EXTERNAL_IP>/docs
+
+### 🔍 Access Services
+
+Port forward services:
+
+```bash
+kubectl port-forward -n opt-rag svc/backend 8000:8000
+kubectl port-forward -n opt-rag svc/frontend 8501:8501
 ```
 
 ---
 
-## ✅ Optional Add-ons
+## 3. ☁️ Deploy on Google Cloud (GKE)
 
-- Use `GPU` nodes: Add `--accelerator="type=nvidia-tesla-t4,count=1"` to `gcloud container clusters create`
-- Set up monitoring: [Grafana + Prometheus + Jaeger](https://github.com/hieunq95/tiny-llm-agent)
-- Add HTTPS & domain: Use [Ingress + Google-managed certificate](https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs)
+### 📌 Prerequisites
+
+Install and set up:
+
+* [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
+* Enable GKE + Artifact Registry
+
+### 🧱 Create GKE Cluster
+
+```bash
+gcloud container clusters create opt-rag-cluster \
+  --num-nodes=3 \
+  --zone=us-central1-a \
+  --enable-ip-alias
+```
+
+### 📤 Push Images to Artifact Registry (Optional)
+
+Tag and push images:
+
+```bash
+docker tag opt-rag-backend gcr.io/your-project-id/opt-rag-backend:v1
+docker push gcr.io/your-project-id/opt-rag-backend:v1
+```
+
+### 🛠️ Deploy to GKE
+
+```bash
+cd kubernetes/cloud
+kubectl create namespace opt-rag
+kubectl apply -f backend.yaml
+kubectl apply -f frontend.yaml
+kubectl apply -f ingress.yaml
+kubectl apply -f monitoring.yaml
+```
+
+### 🌐 Access via External IP
+
+```bash
+kubectl get svc -n opt-rag
+```
+
+Use `EXTERNAL-IP` from LoadBalancer to access:
+
+* Backend: `http://EXTERNAL-IP:8000/docs`
+* Frontend: `http://EXTERNAL-IP:8501`
+* Full App via Ingress or NGINX: `http://EXTERNAL-IP`
 
 ---
+
+## 4. 📊 Monitoring Setup
+
+* **Prometheus** collects metrics from FastAPI
+* **Grafana** visualizes dashboards
+* **Jaeger** traces document upload and query latency
+
+After deployment:
+
+```bash
+kubectl port-forward -n opt-rag svc/prometheus 9090:9090
+kubectl port-forward -n opt-rag svc/grafana 3000:3000
+kubectl port-forward -n opt-rag svc/jaeger 16686:16686
+```
+
+---
+
+## 🧹 Cleanup
+
+```bash
+kubectl delete namespace opt-rag
+minikube stop && minikube delete
+```
+
+---
+
+## 🧠 Notes
+
+* Use GPU-enabled node pool if hosting large models (e.g., LLaMA, Mistral)
+* Attach PersistentVolumeClaim for FAISS index and uploaded PDFs
+* Enable auto-scaling for production workloads
+* Set `type: LoadBalancer` in `cloud/*service.yaml` for external access
+
+---
+
+Let me know if you want the actual Kubernetes or Helm files generated next.
