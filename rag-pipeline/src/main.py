@@ -22,6 +22,7 @@ import uuid
 from threading import Event
 from fastapi import HTTPException
 import time
+import asyncio
 
 from src.llm.assistant import OPTRagAssistant
 from src.utils.logging import setup_logging
@@ -182,14 +183,28 @@ async def cancel_generation(request: CancelRequest):
         request: A CancelRequest containing the request_id to cancel
     """
     request_id = request.request_id
+    logger.info(f"Received cancellation request for generation {request_id}")
+    
     if request_id in active_generations:
         # Set the cancellation event
         active_generations[request_id].set()
-        logger.info(f"Cancellation requested for generation {request_id}")
-        return {"status": "success", "message": f"Generation {request_id} cancellation requested"}
+        logger.info(f"Cancellation event set for generation {request_id}")
+        
+        # Sleep briefly to allow the cancellation to propagate
+        await asyncio.sleep(0.1)
+        
+        return {
+            "status": "success", 
+            "message": f"Generation {request_id} cancellation requested",
+            "cancelled": True
+        }
     else:
         logger.warning(f"Attempted to cancel unknown generation ID: {request_id}")
-        raise HTTPException(status_code=404, detail=f"Generation ID {request_id} not found")
+        return {
+            "status": "error",
+            "message": f"Generation ID {request_id} not found",
+            "cancelled": False
+        }
 
 @app.post("/api/query/stream")
 @api_router.post("/query/stream")
@@ -293,6 +308,7 @@ async def stream_query_post(request: QueryRequest):
             finally:
                 # Clean up the active generation
                 if request_id in active_generations:
+                    logger.info(f"Cleaning up resources for generation {request_id}")
                     del active_generations[request_id]
     
         logger.info("Returning StreamingResponse")

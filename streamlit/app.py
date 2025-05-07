@@ -116,38 +116,38 @@ if "should_stop_generation" not in st.session_state:
 if "current_request_id" not in st.session_state:
     st.session_state.current_request_id = None
 
+if "current_response" not in st.session_state:
+    st.session_state.current_response = ""
+
 # Function to handle stopping generation
 def stop_generation():
-    # First, set the local flag to stop displaying more tokens
+    """Handle stop button click - stops generation but preserves text"""
+    # Just set the flag to stop - we'll handle UI updates in the main loop
     st.session_state.should_stop_generation = True
     logger.info("User requested to stop generation")
     
-    # Then, if we have a request ID, call the API to cancel the generation
+    # Store the current response in session state to preserve it
+    # This is the key to preserving text across Streamlit reruns
+    if "temp_response" in st.session_state and st.session_state.temp_response:
+        st.session_state.current_response = st.session_state.temp_response
+        logger.info(f"Preserved response of {len(st.session_state.current_response)} characters")
+    
+    # Send cancel request to backend if we have a request ID
     if st.session_state.current_request_id:
         try:
-            logger.info(f"Attempting to cancel generation for request ID: {st.session_state.current_request_id}")
+            logger.info(f"Sending cancel for request ID: {st.session_state.current_request_id}")
+            cancel_url = f"{RAW_API_URL}/api/cancel"
             
-            # Get cancel URL using the helper
-            cancel_url = get_api_url('cancel')
-            logger.info(f"Sending cancellation request to {cancel_url}")
-            
-            cancel_response = requests.post(
+            requests.post(
                 cancel_url,
                 json={"request_id": st.session_state.current_request_id},
-                timeout=5,
-                headers={"Connection": "close"}  # Ensure connection closes after request
+                timeout=5
             )
-            
-            # Log detailed response for debugging
-            status_code = cancel_response.status_code
-            logger.info(f"Cancel request response status: {status_code}")
-            
-            if status_code == 200:
-                logger.info(f"Successfully sent cancellation request for {st.session_state.current_request_id}")
-            else:
-                logger.warning(f"Failed to cancel generation: {status_code} - {cancel_response.text}")
         except Exception as e:
-            logger.error(f"Error sending cancellation request: {str(e)}", exc_info=True)
+            logger.error(f"Error cancelling: {str(e)}")
+    
+    # Set generating to false to re-enable the input field
+    st.session_state.is_generating = False
 
 # Document uploader section
 st.header("Document Management")
@@ -229,8 +229,9 @@ prompt = st.chat_input("What visa question can I help with today?", disabled=st.
 
 if prompt:
     logger.info(f"Received prompt: {prompt}")
-    # Reset stop flag when starting new generation
+    # Reset stop flag and current response when starting a new query
     st.session_state.should_stop_generation = False
+    st.session_state.current_response = ""
     
     # Add user message to chat history
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -243,21 +244,25 @@ if prompt:
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         full_response = ""
+        # Temporary storage for the current response
+        st.session_state.temp_response = ""
+        
         message_placeholder.markdown("🤔 Searching visa regulations...")
         
-        # Create a column layout for the stop button
-        cols = st.columns([9, 1])
-        
-        # Show stop button in the small column during generation
-        with cols[1]:
-            stop_button = st.button("Stop", key="stop_button", on_click=stop_generation, disabled=False)
+        # Show stop button during generation
+        stop_button = st.button(
+            "⏹️ Stop Generation", 
+            key=f"stop_button_{len(st.session_state.messages)}", 
+            on_click=stop_generation,
+            type="primary"
+        )
         
         # Mark that we're generating - disables the input prompt 
         st.session_state.is_generating = True
         
         try:
-            # Use streaming endpoint with helper function
-            stream_url = get_api_url('query/stream')
+            # Use streaming endpoint
+            stream_url = f"{RAW_API_URL}/api/query/stream"
             logger.info(f"Sending streaming query to {stream_url}")
             
             # Set a long timeout for streaming
@@ -294,7 +299,9 @@ if prompt:
                     for chunk in response.iter_content(chunk_size=1024):
                         # Check if user clicked stop button
                         if st.session_state.should_stop_generation:
-                            logger.info("Stopping generation as requested by user")
+                            logger.info("Stop detected - halting token processing")
+                            # Don't break here immediately - allow cleanup to happen properly
+                            # This allows us to display what we have so far
                             break
                         
                         if not chunk:
@@ -324,23 +331,18 @@ if prompt:
                                         # Check if this is the initial message with request ID
                                         if isinstance(parsed_data, dict) and "request_id" in parsed_data:
                                             st.session_state.current_request_id = parsed_data["request_id"]
-                                            logger.info(f"Stored request ID from streaming data: {parsed_data['request_id']}")
+                                            logger.info(f"Stored request ID from data: {parsed_data['request_id']}")
                                             continue
                                         
-                                        # Check if this is a status message
+                                        # Check if this is a status message (like 'cancelled')
                                         if isinstance(parsed_data, dict) and "status" in parsed_data:
                                             if parsed_data["status"] == "cancelled":
-                                                logger.info("Received cancellation confirmation from server")
+                                                logger.info("Received cancellation confirmation")
                                                 continue
                                         
-                                        # Treat as a normal token
+                                        # Get the token
                                         token = parsed_data
                                         response_started = True
-                                        
-                                        # Log token received
-                                        if token_count := token_count + 1 if 'token_count' in locals() else 1:
-                                            if token_count % 20 == 0:
-                                                logger.info(f"Received {token_count} tokens so far")
                                         
                                         # Skip common assistant prefixes
                                         if token in ["A:", "A: ", "Assistant:", "Assistant: ", "AI:", "AI: ", "Human:", "Human: "]:
@@ -350,86 +352,91 @@ if prompt:
                                         # Add the token to our response
                                         full_response += token
                                         
-                                        # Update the UI with accumulated tokens
-                                        # Add a blinking cursor to show it's streaming
+                                        # Store in session state to preserve across reruns if stopped
+                                        st.session_state.temp_response = full_response
+                                        
+                                        # Update the UI with accumulated tokens + cursor
                                         message_placeholder.markdown(full_response + "▌")
+                                        
                                     except json.JSONDecodeError as e:
                                         logger.warning(f"Error parsing token: {e}, data: {data!r}")
-                                        # Try to recover - if it looks like a valid string anyway, use it
+                                        # Try to recover from malformed JSON
                                         if data.startswith('"') and data.endswith('"'):
                                             try:
                                                 token = data.strip('"')
                                                 full_response += token
+                                                st.session_state.temp_response = full_response
                                                 message_placeholder.markdown(full_response + "▌")
                                                 response_started = True
-                                                logger.info(f"Recovered token from malformed JSON: {token}")
                                             except Exception:
                                                 pass
                     
-                    # Check if we actually got any response
-                    if not response_started and not st.session_state.should_stop_generation:
-                        logger.error("No tokens received from the streaming endpoint")
-                        # Fall back to non-streaming API
-                        logger.info("Falling back to non-streaming endpoint")
-                        
-                        # Use helper for fallback URL
-                        fallback_url = get_api_url('query')
-                        logger.info(f"Using fallback endpoint: {fallback_url}")
-                        
-                        fallback_response = requests.post(
-                            fallback_url,
-                            json={"question": prompt},
-                            timeout=timeout
-                        )
-                        
-                        if fallback_response.status_code == 200:
-                            answer = fallback_response.json().get("answer", "No answer provided")
-                            # Clean prefixes
-                            for prefix in ["A:", "Assistant:", "AI:"]:
-                                if answer.startswith(prefix):
-                                    answer = answer[len(prefix):].lstrip()
-                                    break
-                                
-                            message_placeholder.markdown(answer)
-                            st.session_state.messages.append({"role": "assistant", "content": answer})
-                            logger.info("Successfully used fallback non-streaming endpoint")
-                        else:
-                            message_placeholder.markdown("❌ No tokens received and fallback also failed.")
-                    elif st.session_state.should_stop_generation:
-                        # If generation was stopped, add message
-                        message_placeholder.markdown(full_response + " *(Generation stopped)*")
-                        st.session_state.messages.append({"role": "assistant", "content": full_response + " *(Generation stopped)*"})
-                        logger.info("Response marked as stopped by user")
+                    # SIMPLIFIED HANDLING AFTER STREAM ENDS OR IS STOPPED
+                    # First check if we have a saved response from a stop operation
+                    if st.session_state.should_stop_generation and st.session_state.current_response:
+                        # Use the preserved response from the stop_generation callback
+                        full_response = st.session_state.current_response
+                        display_text = full_response + "\n\n*(Generation stopped by user)*"
+                        logger.info(f"Using preserved response of {len(full_response)} characters")
                     else:
-                        # Final cleanup of the response - remove any remaining prefixes
+                        # Remove any common prefixes
                         for prefix in ["A:", "Assistant:", "AI:"]:
                             if full_response.startswith(prefix):
                                 full_response = full_response[len(prefix):].lstrip()
                                 break
-                            
-                        # Final update without the cursor
-                        message_placeholder.markdown(full_response)
                         
-                        # Add final response to chat history
-                        st.session_state.messages.append({"role": "assistant", "content": full_response})
-                        logger.info(f"Completed streaming response of length {len(full_response)}")
+                        # Handle different completion scenarios
+                        if st.session_state.should_stop_generation and full_response:
+                            display_text = full_response + "\n\n*(Generation stopped by user)*"
+                            logger.info(f"Generation stopped with {len(full_response)} characters")
+                        elif not response_started:
+                            # If no tokens were received at all
+                            if st.session_state.should_stop_generation:
+                                display_text = "*Generation stopped before producing a response*" 
+                            else:
+                                # Try fallback non-streaming endpoint
+                                logger.info("No tokens received, trying fallback endpoint")
+                                fallback_url = f"{RAW_API_URL}/api/query"
+                                fallback_response = requests.post(
+                                    fallback_url,
+                                    json={"question": prompt},
+                                    timeout=timeout
+                                )
+                                
+                                if fallback_response.status_code == 200:
+                                    full_response = fallback_response.json().get("answer", "")
+                                    display_text = full_response
+                                else:
+                                    display_text = "❌ No response received from the server."
+                        else:
+                            # Normal completion
+                            display_text = full_response
+                            logger.info(f"Completed response with {len(full_response)} characters")
+                    
+                    # Update the UI with final content
+                    message_placeholder.markdown(display_text)
+                    
+                    # Always add the raw response to chat history (without stop message)
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
                 else:
                     error_msg = f"Error: {response.status_code} - {response.text}"
                     logger.error(error_msg)
                     message_placeholder.markdown(f"❌ {error_msg}")
-        except requests.exceptions.Timeout:
-            logger.error(f"Request timed out after {timeout} seconds")
-            message_placeholder.markdown("❌ Request timed out. The server took too long to respond.")
+                    
         except Exception as e:
             logger.error(f"Request failed: {str(e)}", exc_info=True)
             message_placeholder.markdown(f"❌ Error: {str(e)}")
         finally:
-            # Re-enable the chat input
+            # ALWAYS re-enable the chat input when done
             st.session_state.is_generating = False
-            # Reset the stop button flag 
+            # Reset the stop button flag
             st.session_state.should_stop_generation = False
             # Clear the request ID
             st.session_state.current_request_id = None
+            # Clear the temporary response
+            # Don't clear current_response as we need it if we were stopped
+            if not st.session_state.current_response:
+                st.session_state.temp_response = ""
 
 # Footer
 # st.markdown("---")

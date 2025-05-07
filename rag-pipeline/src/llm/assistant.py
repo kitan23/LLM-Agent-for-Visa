@@ -529,6 +529,13 @@ class OPTRagAssistant:
                 
                 # Retrieve relevant context
                 with tracer.start_as_current_span("retrieve_context"):
+                    # Check early for cancellation
+                    if cancel_event and cancel_event.is_set():
+                        logger.info("Generation cancelled before context retrieval")
+                        status = "cancelled"
+                        QUERY_COUNT.labels(status="cancelled", query_type="streaming").inc()
+                        return
+                        
                     retrieval_start = time.time()
                     
                     if hasattr(self.vector_store, "similarity_search"):
@@ -550,6 +557,13 @@ class OPTRagAssistant:
                     VECTOR_RETRIEVAL_LATENCY.observe(retrieval_time)
                     span.set_attribute("retrieval_time", retrieval_time)
                 
+                # Check again for cancellation
+                if cancel_event and cancel_event.is_set():
+                    logger.info("Generation cancelled after context retrieval")
+                    status = "cancelled"
+                    QUERY_COUNT.labels(status="cancelled", query_type="streaming").inc()
+                    return
+                
                 # Prepare prompt with context and question
                 with tracer.start_as_current_span("prepare_prompt"):
                     prompt = self.visa_prompt.format(
@@ -566,6 +580,12 @@ class OPTRagAssistant:
                     
                     # Generate and stream tokens with direct streamer
                     async for token in direct_streamer.generate_and_stream(prompt, max_tokens=1024, cancel_event=cancel_event):
+                        # Check for cancellation (additional safety check)
+                        if cancel_event and cancel_event.is_set():
+                            logger.info(f"Streaming cancelled after {token_count} tokens")
+                            status = "cancelled"
+                            break
+                            
                         token_count += 1
                         if token_count % 10 == 0:
                             logger.info(f"Streamed {token_count} tokens so far")
@@ -576,7 +596,7 @@ class OPTRagAssistant:
                 # Record metrics
                 processing_time = time.time() - start_time
                 QUERY_LATENCY.observe(processing_time)
-                QUERY_COUNT.labels(status="success", query_type="streaming").inc()
+                QUERY_COUNT.labels(status=status, query_type="streaming").inc()
                 
                 # Add processing time to the span
                 span.set_attribute("processing_time", processing_time)

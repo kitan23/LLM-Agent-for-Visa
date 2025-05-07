@@ -55,6 +55,11 @@ class DirectStreamer:
         """
         logger.info("Setting up streamer")
         
+        # Check for early cancellation
+        if cancel_event and cancel_event.is_set():
+            logger.info("Cancellation requested before streamer setup")
+            return
+        
         # Format messages for model
         messages = [{"role": "user", "content": prompt}]
         
@@ -103,48 +108,59 @@ class DirectStreamer:
         # Set up buffer to handle multi-byte characters
         buffer = ""
         
-        # Stream tokens with rate limiting
-        for token in streamer:
-            # Check for cancellation
-            if cancel_event and cancel_event.is_set():
-                logger.info("Streaming cancelled during generation")
-                break
-                
-            buffer += token
-            
-            # For multi-byte characters, we need to ensure we're yielding complete UTF-8 sequences
-            # This is especially important for languages with non-ASCII characters
-            try:
-                # Try to encode - if it works, we have a complete character
-                buffer.encode('utf-8')
-                
-                # Yield the buffer and reset
-                yield buffer
-                buffer = ""
-                tokens_streamed += 1
-                
-                # Log progress periodically
-                if tokens_streamed % 20 == 0:
-                    elapsed = time.time() - start_time
-                    rate = tokens_streamed / elapsed if elapsed > 0 else 0
-                    logger.info(f"Streamed {tokens_streamed} tokens ({rate:.1f} tokens/sec)")
-                
-                # Rate limiting to avoid overwhelming the client
-                # This small sleep helps ensure the frontend can keep up
-                if tokens_streamed % 5 == 0:
-                    await asyncio.sleep(0.01)
+        try:
+            # Stream tokens with rate limiting
+            for token in streamer:
+                # Check for cancellation
+                if cancel_event and cancel_event.is_set():
+                    logger.info("Streaming cancelled during generation")
+                    break
                     
-            except UnicodeEncodeError:
-                # If encoding fails, we have an incomplete character
-                # Keep in buffer until we get more tokens to complete it
-                continue
+                buffer += token
                 
-        # Yield any remaining text in the buffer
-        if buffer:
-            yield buffer
+                # For multi-byte characters, we need to ensure we're yielding complete UTF-8 sequences
+                # This is especially important for languages with non-ASCII characters
+                try:
+                    # Try to encode - if it works, we have a complete character
+                    buffer.encode('utf-8')
+                    
+                    # Yield the buffer and reset
+                    yield buffer
+                    buffer = ""
+                    tokens_streamed += 1
+                    
+                    # Log progress periodically
+                    if tokens_streamed % 20 == 0:
+                        elapsed = time.time() - start_time
+                        rate = tokens_streamed / elapsed if elapsed > 0 else 0
+                        logger.info(f"Streamed {tokens_streamed} tokens ({rate:.1f} tokens/sec)")
+                    
+                    # Rate limiting to avoid overwhelming the client
+                    # This small sleep helps ensure the frontend can keep up
+                    if tokens_streamed % 5 == 0:
+                        await asyncio.sleep(0.01)
+                        
+                except UnicodeEncodeError:
+                    # If encoding fails, we have an incomplete character
+                    # Keep in buffer until we get more tokens to complete it
+                    continue
+                    
+            # Yield any remaining text in the buffer
+            if buffer and not (cancel_event and cancel_event.is_set()):
+                yield buffer
+                
+        except Exception as e:
+            logger.error(f"Error during streaming: {e}", exc_info=True)
+            if not (cancel_event and cancel_event.is_set()):
+                yield f"Error during streaming: {str(e)}"
+        finally:
+            generation_done = time.time() - start_time
+            logger.info(f"Streaming complete, streamed {tokens_streamed} tokens in {generation_done:.2f}s")
             
-        logger.info(f"Streaming complete, streamed {tokens_streamed} tokens")
-        thread.join(timeout=1.0)
+            # Wait for the generation thread to finish (timeout after 2s if it's hanging)
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                logger.warning("Generation thread did not terminate within timeout")
         
     def _generate_with_cancel(self, generation_kwargs: dict, cancel_event: Optional[threading.Event] = None):
         """Run the model generation with cancel support.
@@ -154,6 +170,11 @@ class DirectStreamer:
             cancel_event: Event that can be set to cancel generation
         """
         try:
+            # Check for cancellation before starting
+            if cancel_event and cancel_event.is_set():
+                logger.info("Generation cancelled before starting")
+                return
+                
             # Start generation
             self.model.generate(**generation_kwargs)
             
