@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    app: {{ .Release.Name }}-frontend
+    component: frontend
+spec:
+  replicas: {{ .Values.replicaCount.frontend }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-frontend
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-frontend
+        component: frontend
+    spec:
+      containers:
+      - name: frontend
+        image: "{{ .Values.images.registry }}{{ .Values.images.frontend.repository }}:{{ .Values.images.frontend.tag }}"
+        imagePullPolicy: {{ .Values.images.frontend.pullPolicy }}
+        ports:
+        - containerPort: 8501
+          name: http
+        resources:
+          requests:
+            cpu: {{ .Values.resources.frontend.requests.cpu }}
+            memory: {{ .Values.resources.frontend.requests.memory }}
+          limits:
+            cpu: {{ .Values.resources.frontend.limits.cpu }}
+            memory: {{ .Values.resources.frontend.limits.memory }}
+        env:
+        - name: API_URL
+          value: {{ .Values.environment.frontend.API_URL }}
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8501
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8501
+          initialDelaySeconds: 5
+          periodSeconds: 5 

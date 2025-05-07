@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: model-downloader
+  namespace: opt-rag
+spec:
+  containers:
+  - name: downloader
+    image: python:3.10-slim
+    command:
+    - "/bin/bash"
+    - "-c"
+    - "apt-get update && apt-get install -y git && pip install huggingface-hub && python -c \"from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen2.5-0.5B', local_dir='/models/qwen2.5-0.5b')\" && sleep 10"
+    volumeMounts:
+    - name: models-volume
+      mountPath: /models
+  volumes:
+  - name: models-volume
+    persistentVolumeClaim:
+      claimName: models-pvc
+  restartPolicy: Never 

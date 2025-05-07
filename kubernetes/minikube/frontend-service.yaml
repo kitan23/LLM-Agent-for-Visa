@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: opt-rag
+spec:
+  selector:
+    app: opt-rag
+  ports:
+  - port: 8501
+    targetPort: 8501
+    protocol: TCP
+    name: http
+  type: NodePort 

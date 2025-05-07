@@ -19,6 +19,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+*.tar.gz
 
 # Virtual Environment
 venv/
@@ -59,6 +60,9 @@ kubernetes/*/secrets/
 
 # Jenkins
 jenkins/jenkins-config/secrets/
+
+# Scripts
+*.sh
 
 # OS specific
 .DS_Store

@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  labels:
+    app: {{ .Release.Name }}-nginx
+    component: nginx
+spec:
+  replicas: {{ .Values.replicaCount.nginx }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-nginx
+      component: nginx
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-nginx
+        component: nginx
+    spec:
+      containers:
+      - name: nginx
+        image: "{{ .Values.images.registry }}{{ .Values.images.nginx.repository }}:{{ .Values.images.nginx.tag }}"
+        imagePullPolicy: {{ .Values.images.nginx.pullPolicy }}
+        ports:
+        - containerPort: 80
+          name: http
+        - containerPort: 443
+          name: https
+        resources:
+          requests:
+            cpu: {{ .Values.resources.nginx.requests.cpu }}
+            memory: {{ .Values.resources.nginx.requests.memory }}
+          limits:
+            cpu: {{ .Values.resources.nginx.limits.cpu }}
+            memory: {{ .Values.resources.nginx.limits.memory }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 5 

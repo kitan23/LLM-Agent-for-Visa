@@ -1,0 +1,221 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: opt-rag
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    scrape_configs:
+      - job_name: 'backend'
+        static_configs:
+          - targets: ['backend:8000']
+      
+      - job_name: 'frontend'
+        static_configs:
+          - targets: ['frontend:8501']
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: prometheus
+spec:
+  ports:
+  - port: 9090
+    targetPort: 9090
+    protocol: TCP
+  selector:
+    app: opt-rag
+    component: prometheus
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opt-rag
+      component: prometheus
+  template:
+    metadata:
+      labels:
+        app: opt-rag
+        component: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: prometheus-config
+      - name: prometheus-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: grafana
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+  selector:
+    app: opt-rag
+    component: grafana
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opt-rag
+      component: grafana
+  template:
+    metadata:
+      labels:
+        app: opt-rag
+        component: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "admin"
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        volumeMounts:
+        - name: grafana-data
+          mountPath: /var/lib/grafana
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "300m"
+            memory: "512Mi"
+      volumes:
+      - name: grafana-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: jaeger
+spec:
+  ports:
+  - port: 16686
+    targetPort: 16686
+    protocol: TCP
+    name: ui
+  - port: 4317
+    targetPort: 4317
+    protocol: TCP
+    name: otlp-grpc
+  selector:
+    app: opt-rag
+    component: jaeger
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger
+  namespace: opt-rag
+  labels:
+    app: opt-rag
+    component: jaeger
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opt-rag
+      component: jaeger
+  template:
+    metadata:
+      labels:
+        app: opt-rag
+        component: jaeger
+    spec:
+      containers:
+      - name: jaeger
+        image: jaegertracing/all-in-one:latest
+        ports:
+        - containerPort: 5775
+          protocol: UDP
+        - containerPort: 6831
+          protocol: UDP
+        - containerPort: 6832
+          protocol: UDP
+        - containerPort: 5778
+          protocol: TCP
+        - containerPort: 16686
+          protocol: TCP
+        - containerPort: 14268
+          protocol: TCP
+        - containerPort: 14250
+          protocol: TCP
+        - containerPort: 4317
+          protocol: TCP
+        - containerPort: 4318
+          protocol: TCP
+        env:
+        - name: COLLECTOR_ZIPKIN_HOST_PORT
+          value: ":9411"
+        - name: COLLECTOR_OTLP_ENABLED
+          value: "true"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "512Mi"
+          limits:
+            cpu: "500m"
+            memory: "1Gi" 
