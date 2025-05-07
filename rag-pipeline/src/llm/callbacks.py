@@ -7,8 +7,11 @@ in both synchronous and asynchronous contexts.
 
 
 import asyncio 
+import logging
 from typing import Any, Dict, List, Optional 
 from langchain.callbacks.base import BaseCallbackHandler 
+
+logger = logging.getLogger("opt_rag.callbacks")
 
 class StreamingCallbackHandler(BaseCallbackHandler): 
     """
@@ -47,37 +50,60 @@ class AsyncStreamingCallbackHandler(BaseCallbackHandler):
         """
         super().__init__()
         self.queue = queue 
+        logger.info("AsyncStreamingCallbackHandler initialized with queue")
     
     async def on_llm_new_token(self, token: str, **kwargs: Any) -> None:
         """Process new tokens as they are generated."""
+        logger.debug(f"New token received: {token!r}")
         await self.queue.put(token)
+        logger.debug(f"Token added to queue, current size: {self.queue.qsize()}")
         
     async def aiter(self):
         """Async iterator for tokens."""
+        logger.info("Starting aiter for token streaming")
         while True:
             try:
-                token = await asyncio.wait_for(self.queue.get(), timeout=30.0)
+                logger.debug("Waiting for token from queue...")
+                token = await asyncio.wait_for(self.queue.get(), timeout=60.0)  # Increased timeout
+                logger.debug(f"Got token from queue: {token!r}")
+                
+                # Empty token signals end of generation
+                if token == "":
+                    logger.info("Received empty token, ending stream")
+                    break
+                    
                 yield token
                 self.queue.task_done()
             except asyncio.TimeoutError:
-                # If no tokens for 30 seconds, end streaming
+                # If no tokens for 60 seconds, end streaming
+                logger.warning("Timeout waiting for tokens, ending stream")
                 break
             except asyncio.CancelledError:
                 # Handle cancellation
+                logger.warning("Token stream was cancelled")
                 break
+            except Exception as e:
+                logger.error(f"Error in token streaming: {e}")
+                break
+        
+        logger.info("Token streaming complete")
         
     def on_llm_new_token_sync(self, token: str, **kwargs: Any) -> None:
         """Synchronous fallback for token handling - needed for some LangChain versions."""
         # Use asyncio.run_coroutine_threadsafe or create_task in the running loop if available
+        logger.debug(f"Sync token received: {token!r}")
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 asyncio.create_task(self.queue.put(token))
+                logger.debug("Token added to queue via create_task")
             else:
                 # Fallback in case we're not in an async context
                 asyncio.run(self.queue.put(token))
-        except RuntimeError:
+                logger.debug("Token added to queue via asyncio.run")
+        except RuntimeError as e:
             # If we can't get event loop, just print the token directly
+            logger.error(f"Error adding token to queue: {e}")
             print(token, end="", flush=True)
 
 class StreamingStdOutCallbackHandler(BaseCallbackHandler): 

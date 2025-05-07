@@ -12,6 +12,7 @@ import asyncio
 import threading
 from typing import Dict, Any, Optional, AsyncIterator, Iterator, Union, List
 from pathlib import Path
+from threading import Event
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
@@ -19,6 +20,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from opentelemetry import trace
 
 from src.llm.callbacks import AsyncStreamingCallbackHandler
+from src.llm.direct_streamer import DirectStreamer
 from src.utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTOR_COUNT, VECTOR_RETRIEVAL_LATENCY, QUERY_ERRORS
 from src.retriever.vector_store import load_vector_store, build_vector_store
 from src.document_processor.pipeline import process_documents
@@ -189,10 +191,17 @@ class OPTRagAssistant:
         - DO NOT make any claims or assertions that aren't directly supported by the provided context
         - Focus specifically on visa-related issues: OPT applications, CPT authorization, study/work permits, and visa status questions
         - If information is not available in the context, clearly state "Based on the provided context, I don't have specific information about that"
-        - Never fabricate information or provide speculative advice on visa matters
+        - NEVER fabricate information or provide speculative advice on visa matters
         - When answering, always check if your response contradicts any information in the context - if it does, defer to the context
+        - If the context indicates no documentation is available, be honest about this limitation
+        - NEVER pretend to have information that isn't in the context
         - Always indicate the source of information in your responses
         - Avoid legal advice; clarify when questions require consultation with immigration attorneys
+        - DO NOT UNDER ANY CIRCUMSTANCES prefix your response with "A:", "Assistant:", or any similar prefix - just provide the answer directly
+        - If the context says there is no information on the topic, clearly state this and don't try to answer the question
+        - DO NOT repeat the question in your answer or include "and how does it work" or similar phrases
+        - DO NOT include any prefixes like "A:" or "Assistant:" anywhere in your response, not just at the beginning
+        - Your response should NOT contain multiple answers or repetitions - just provide a single coherent answer
 
         ## CONTEXT
         {context}
@@ -203,11 +212,15 @@ class OPTRagAssistant:
 
         ## RESPONSE FORMAT
         - Begin with a direct and factually accurate answer to the question based ONLY on the context provided
-        - Provide specific, relevant details from official sources in the context
+        - DO NOT start with "A:" or "Assistant:" or any similar prefix
+        - DO NOT repeat the question in your answer
+        - If the context doesn't contain relevant information, clearly state this limitation
+        - Provide specific, relevant details from official sources in the context ONLY IF AVAILABLE
         - Include citation to specific documents/policies when available
         - Highlight important deadlines or requirements mentioned in the context
         - If applicable, mention next steps the student should take according to the context
         - End with a disclaimer that this information is not legal advice
+        - IMPORTANT: Your response should be a single, coherent answer - DO NOT provide multiple versions of the same answer
 
         ## QUESTION
         {question}
@@ -490,11 +503,12 @@ class OPTRagAssistant:
             streamer=streamer
         )
 
-    async def astream_response(self, query: str) -> AsyncIterator[str]:
+    async def astream_response(self, query: str, cancel_event: Optional[threading.Event] = None) -> AsyncIterator[str]:
         """Stream response to a question asynchronously.
         
         Args:
             query: User's question
+            cancel_event: Optional event that can be set to cancel generation
             
         Yields:
             Response tokens as they are generated
@@ -510,8 +524,8 @@ class OPTRagAssistant:
                 # Record query count (starting)
                 QUERY_COUNT.labels(status="started", query_type="streaming").inc()
                 
-                # Create callback handler for streaming
-                callback_handler = AsyncStreamingCallbackHandler(asyncio.Queue())
+                # Create direct streamer for token streaming
+                direct_streamer = DirectStreamer(self.model, self.tokenizer, self.device)
                 
                 # Retrieve relevant context
                 with tracer.start_as_current_span("retrieve_context"):
@@ -519,10 +533,17 @@ class OPTRagAssistant:
                     
                     if hasattr(self.vector_store, "similarity_search"):
                         results = self.vector_store.similarity_search(query, k=4)
-                        context = "\n\n".join([doc.page_content for doc in results])
+                        if results and len(results) > 0:
+                            context = "\n\n".join([doc.page_content for doc in results])
+                            logger.info(f"Retrieved {len(results)} relevant documents")
+                        else:
+                            # No relevant documents found in vector store
+                            context = "No information about this topic was found in the available documents. Please provide a response stating clearly that you don't have information on this specific topic and avoid making assumptions or providing information not supported by documentation."
+                            logger.warning("No relevant documents found for query")
                     else:
                         # No documents in the vector store
-                        context = "No relevant documentation is available."
+                        context = "The knowledge base is currently empty. No documents have been loaded. Please provide a response stating clearly that you don't have any documentation available and cannot provide specific information."
+                        logger.warning("Vector store is empty or unavailable")
                         
                     # Record vector retrieval time
                     retrieval_time = time.time() - retrieval_start
@@ -535,19 +556,22 @@ class OPTRagAssistant:
                         context=context,
                         question=query
                     )
-                    messages = [{"role": "user", "content": prompt}]
+                    logger.info("Prepared prompt for streaming generation")
                 
-                # Generate streaming response
+                # Generate streaming response using direct streamer
                 with tracer.start_as_current_span("generate_streaming_answer"):
-                    # Stream generation using asyncio
-                    stream_task = asyncio.create_task(self._agenerate_with_callback(messages, callback_handler))
+                    # Start streaming tokens
+                    logger.info("Starting to stream tokens with direct streamer")
+                    token_count = 0
                     
-                    # Yield tokens as they are generated
-                    async for token in callback_handler.aiter():
+                    # Generate and stream tokens with direct streamer
+                    async for token in direct_streamer.generate_and_stream(prompt, max_tokens=1024, cancel_event=cancel_event):
+                        token_count += 1
+                        if token_count % 10 == 0:
+                            logger.info(f"Streamed {token_count} tokens so far")
                         yield token
-                        
-                    # Wait for generation to complete
-                    await stream_task
+                    
+                    logger.info(f"Streaming complete. Total tokens: {token_count}")
                 
                 # Record metrics
                 processing_time = time.time() - start_time
@@ -567,7 +591,7 @@ class OPTRagAssistant:
                 span.record_exception(e)
                 
                 # Log error
-                logger.error(f"Error processing streaming query: {e}")
+                logger.error(f"Error processing streaming query: {e}", exc_info=True)
                 
                 # Record metrics
                 processing_time = time.time() - start_time
@@ -577,55 +601,5 @@ class OPTRagAssistant:
                 
                 # Yield error message
                 yield f"Error: {str(e)}"
-
-    async def _agenerate_with_callback(self, messages, callback_handler):
-        """Generate response with callback handler asynchronously."""
-        inputs = self.tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            return_tensors="pt"
-        ).to(self.device)
-        
-        # Create a separate thread for generation
-        generation_task = asyncio.get_event_loop().run_in_executor(
-            None,
-            self._generate_with_callback,
-            inputs,
-            callback_handler
-        )
-        
-        await generation_task
-        
-    def _generate_with_callback(self, inputs, callback_handler):
-        """Run model generation with callback in a separate thread."""
-        try:
-            # Create a TextIteratorStreamer that works with the model
-            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-            
-            # Run the model generation with the streamer
-            self.model.generate(
-                inputs,
-                max_new_tokens=1024,
-                temperature=0.7,
-                top_p=0.9,
-                repetition_penalty=1.1,
-                do_sample=True,
-                    streamer=streamer
-                )
-            
-            # Process the streamer tokens and send them to our callback handler's queue directly
-            # This avoids asyncio.run() in a thread which can cause issues
-            for token in streamer:
-                # Put tokens directly in the queue without using asyncio.run
-                callback_handler.queue.put_nowait(token)
-                
-            # Signal end of generation
-            callback_handler.queue.put_nowait("")
-                
-        except Exception as e:
-            logger.error(f"Error in _generate_with_callback: {e}")
-            # Signal completion with error
-            callback_handler.queue.put_nowait(f"Error: {str(e)}")
-            callback_handler.queue.put_nowait("")  # Empty token to signal end
 
 

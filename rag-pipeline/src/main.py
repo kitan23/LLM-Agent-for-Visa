@@ -17,12 +17,22 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, make_asgi_app
 import shutil
 from pathlib import Path
+import json
+import uuid
+from threading import Event
+from fastapi import HTTPException
+import time
 
 from src.llm.assistant import OPTRagAssistant
 from src.utils.logging import setup_logging
 from src.utils.metrics import initialize_metrics, APP_INFO
 from src.utils.config import Settings, get_settings
 from src.utils.tracing import setup_jaeger_tracing, get_tracer
+
+# Set up detailed logging for streaming-related modules
+logging.getLogger("opt_rag.assistant").setLevel(logging.DEBUG)
+logging.getLogger("opt_rag.callbacks").setLevel(logging.DEBUG)
+logging.getLogger("opt_rag.main").setLevel(logging.DEBUG)
 
 # Configure logging 
 setup_logging()
@@ -39,10 +49,26 @@ app = FastAPI(
     version = "1.0.0"
 )
 
-# Add CORS middleware
+# Create API router with prefix
+api_router = FastAPI(
+    title = "OPT-RAG API Routes",
+    description = "API routes for OPT-RAG",
+    version = "1.0.0"
+)
+
+# Add CORS middleware to main app
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Update with specific origins in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Add CORS middleware to API router
+api_router.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,6 +92,10 @@ app.mount("/metrics", metrics_app)
 
 # Initialize the OPT-RAG assistant 
 assistant = None 
+
+# Add this after the app initialization
+# Dictionary to store active generation tasks and their cancellation events
+active_generations = {}
 
 @app.on_event("startup")
 async def startup_event():
@@ -93,7 +123,12 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Failed to initialize OPT-RAG assistant {e}")
 
+# Add routes to both the main app and the API router
+# This maintains backward compatibility while also supporting /api/* routes
+
+# Root endpoint
 @app.get("/", response_model=Dict[str, str])
+@api_router.get("/", response_model=Dict[str, str])
 async def root():
     """Root endpoint."""
     return {"message": "OPT-RAG API is running"}
@@ -104,6 +139,7 @@ class QueryRequest(BaseModel):
 
 # Support both GET with query params and POST with JSON body
 @app.post("/api/query")
+@api_router.post("/query")
 async def query_post(request: QueryRequest):
     """Standard query endpoint that returns complete response (POST)"""
     if not assistant: 
@@ -121,6 +157,7 @@ async def query_post(request: QueryRequest):
         }
 
 @app.get("/query", response_model=Dict[str, Any])
+@api_router.get("/query", response_model=Dict[str, Any])
 async def query_get(q: str = Query(..., description="Query text")):
     """Answer a question using OPT-RAG (GET)."""
     if not assistant:
@@ -132,28 +169,146 @@ async def query_get(q: str = Query(..., description="Query text")):
         logger.info(f"Received query: {q}")
         return assistant.answer_question(q)
 
+# Create a model for the cancellation request
+class CancelRequest(BaseModel):
+    request_id: str
+
+@app.post("/api/cancel")
+@api_router.post("/cancel")
+async def cancel_generation(request: CancelRequest):
+    """Cancel an ongoing generation task.
+    
+    Args:
+        request: A CancelRequest containing the request_id to cancel
+    """
+    request_id = request.request_id
+    if request_id in active_generations:
+        # Set the cancellation event
+        active_generations[request_id].set()
+        logger.info(f"Cancellation requested for generation {request_id}")
+        return {"status": "success", "message": f"Generation {request_id} cancellation requested"}
+    else:
+        logger.warning(f"Attempted to cancel unknown generation ID: {request_id}")
+        raise HTTPException(status_code=404, detail=f"Generation ID {request_id} not found")
+
 @app.post("/api/query/stream")
+@api_router.post("/query/stream")
 async def stream_query_post(request: QueryRequest):
     """Streaming query endpoint (POST)."""
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
+    # Create a request ID and cancellation event
+    request_id = str(uuid.uuid4())
+    cancel_event = Event()
+    active_generations[request_id] = cancel_event
+    
     # Create a span for this operation
     tracer = get_tracer()
     with tracer.start_as_current_span("stream_query_post_operation"):
-        logger.info(f"Received streaming query: {request.question}")
+        logger.info(f"Received streaming query: {request.question} (ID: {request_id})")
 
         async def generate():
-            async for token in assistant.astream_response(request.question):
-                yield f"data: {token}\n\n"
-            yield "data: [DONE]\n\n"
+            token_count = 0
+            full_response = ""
+            skip_prefixes = ["A:", "A: ", "Assistant:", "Assistant: ", "AI:", "AI: ", "Human:", "Human: "]
+            seen_prefixes = set()  # Track prefixes we've seen to avoid logging duplicates
+            processed_full_response = False
+            
+            try:
+                # Send request ID first
+                request_id_json = json.dumps({"request_id": request_id})
+                yield f"data: {request_id_json}\n\n"
+                
+                logger.info("Starting SSE stream generation")
+                # Pass the question and cancel event to the assistant
+                stream_iter = assistant.astream_response(request.question, cancel_event=cancel_event)
+                logger.info("Got stream iterator, starting to yield tokens")
+                
+                # Keep track of time to ensure heartbeat
+                last_token_time = time.time()
+                
+                async for token in stream_iter:
+                    # Heartbeat every 10 seconds to keep connection alive
+                    current_time = time.time()
+                    if current_time - last_token_time > 10:
+                        logger.info("Sending heartbeat comment to keep connection alive")
+                        yield ": heartbeat\n\n"
+                    
+                    last_token_time = current_time
+                    
+                    # Check if cancellation was requested
+                    if cancel_event.is_set():
+                        logger.info(f"Generation {request_id} was cancelled")
+                        yield f"data: {json.dumps({'status': 'cancelled'})}\n\n"
+                        yield "data: [DONE]\n\n"
+                        break
+                
+                    token_count += 1
+                    
+                    # Debug log every token
+                    if token_count % 20 == 0:
+                        logger.info(f"Generated {token_count} tokens so far")
+                    
+                    # Skip any tokens that are just the prefixes we want to avoid
+                    if token in skip_prefixes:
+                        if token not in seen_prefixes:
+                            logger.info(f"Skipping standalone prefix token: {token!r}")
+                            seen_prefixes.add(token)
+                        continue
+                    
+                    # Add token to full response for tracking
+                    full_response += token
+                    
+                    # Skip if the full response is just whitespace so far
+                    if full_response.strip() == "":
+                        continue
+                    
+                    # Handle prefixes - check only at the beginning
+                    if not processed_full_response:
+                        for prefix in skip_prefixes:
+                            if full_response.startswith(prefix):
+                                full_response = full_response[len(prefix):].lstrip()
+                                logger.info(f"Removed prefix {prefix!r} from start of response")
+                                processed_full_response = True
+                                break
+                    
+                    # Properly format for SSE, escape any JSON-incompatible characters
+                    try:
+                        escaped_token = json.dumps(token)
+                        yield f"data: {escaped_token}\n\n"
+                    except Exception as e:
+                        logger.error(f"Error escaping token: {e}, token: {token!r}")
+                        # Try to send it anyway as string
+                        yield f"data: \"{token}\"\n\n"
+                
+                logger.info(f"Stream complete. Sent {token_count} tokens.")
+                # Signal completion with proper SSE format
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.error(f"Error in SSE generation: {str(e)}", exc_info=True)
+                error_json = json.dumps({"error": str(e)})
+                yield f"data: {error_json}\n\n"
+                yield "data: [DONE]\n\n"
+            finally:
+                # Clean up the active generation
+                if request_id in active_generations:
+                    del active_generations[request_id]
     
+        logger.info("Returning StreamingResponse")
         return StreamingResponse(
             generate(), 
-            media_type="text/event-stream"
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Prevent proxy buffering
+                "X-Request-ID": request_id  # Include the request ID in response headers
+            }
         )
 
 @app.get("/stream")
+@api_router.get("/stream")
 async def stream_query_get(q: str = Query(..., description="Query text")):
     """Stream an answer using OPT-RAG (GET)."""
     if not assistant:
@@ -164,12 +319,34 @@ async def stream_query_get(q: str = Query(..., description="Query text")):
     with tracer.start_as_current_span("stream_query_get_operation"):
         logger.info(f"Received streaming query: {q}")
         
+        async def generate():
+            token_count = 0
+            logger.info("Starting SSE stream generation for GET request")
+            try:
+                async for token in assistant.astream_response(q):
+                    token_count += 1
+                    if token_count % 10 == 0:
+                        logger.info(f"Streaming GET: sent {token_count} SSE events")
+                    # Properly format for SSE, escape any newlines in the token
+                    escaped_token = json.dumps(token)
+                    yield f"data: {escaped_token}\n\n"
+                logger.info(f"GET stream complete. Sent {token_count} tokens.")
+                # Signal completion
+                yield "data: [DONE]\n\n"
+            except Exception as e:
+                logger.error(f"Error in GET SSE generation: {str(e)}")
+                error_json = json.dumps({"error": str(e)})
+                yield f"data: {error_json}\n\n"
+                yield "data: [DONE]\n\n"
+        
+        logger.info("Returning GET StreamingResponse")
         return StreamingResponse(
-            assistant.astream_response(q),
+            generate(),
             media_type="text/event-stream"
         )
 
 @app.post("/documents", response_model=Dict[str, Any])
+@api_router.post("/documents", response_model=Dict[str, Any])
 async def add_documents(
     file: UploadFile = File(...),
     document_type: Optional[str] = Form(None)
@@ -216,6 +393,7 @@ async def add_documents(
                 file_path.unlink()
 
 @app.get("/documents", response_model=Dict[str, Any])
+@api_router.get("/documents", response_model=Dict[str, Any])
 async def list_documents():
     """List documents in the vector store."""
     if not assistant:
@@ -227,6 +405,7 @@ async def list_documents():
         return assistant.list_documents()
 
 @app.get("/metrics/summary", response_model=Dict[str, Any])
+@api_router.get("/metrics/summary", response_model=Dict[str, Any])
 async def metrics_summary():
     """Get a summary of metrics."""
     return {
@@ -236,11 +415,15 @@ async def metrics_summary():
     }
 
 @app.get("/health")
+@api_router.get("/health")
 async def health():
     """Health check endpoint."""
     if assistant:
         return {"status":"healthy"}
     return {"status": "unhealthy", "reason":"Assistant is not initialized"}
+
+# Mount the API router at /api prefix
+app.mount("/api", api_router)
 
 # Run the server
 if __name__ == "__main__":
