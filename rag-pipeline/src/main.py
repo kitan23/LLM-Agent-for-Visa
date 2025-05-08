@@ -45,7 +45,7 @@ APP_MODEL_NAME = "Qwen2.5-1.5b-instruct"
 
 # Initialize FastAPI application 
 app = FastAPI(
-    title = "OPT-RAG API", 
+    title = "Visa RAG Assistant", 
     description = "International Student Visa Assistant API", 
     version = "1.0.0"
 )
