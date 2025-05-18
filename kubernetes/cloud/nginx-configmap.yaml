@@ -37,35 +37,61 @@ data:
             listen 80;
             server_name localhost;
 
-            # API Endpoints - proxy to backend service
-            location /api/ {
-                proxy_pass http://backend:8000/;
+            # Explicit SSE streaming endpoint
+            location = /api/query/stream {
+                proxy_pass http://backend-service:8000/api/query/stream;
                 proxy_http_version 1.1;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
-                
-                # Increased timeouts for LLM processing
+                proxy_set_header Connection '';
+                proxy_buffering off;
+                proxy_cache off;
+                proxy_set_header X-Accel-Buffering no;
+                chunked_transfer_encoding on;
+                keepalive_timeout 300s;
                 proxy_connect_timeout 30s;
-                proxy_send_timeout 120s;
-                proxy_read_timeout 300s;  # 5 minutes
+                proxy_send_timeout 300s;
+                proxy_read_timeout 300s;
             }
 
-            # Forward all other requests to Streamlit
+            # API Endpoints - proxy to backend service
+            location /api/ {
+                proxy_pass http://backend-service:8000/;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 120s;
+                proxy_read_timeout 300s;
+            }
+
+            # Health check endpoint (K8s liveness)
+            location = /healthz {
+                return 200 'OK';
+                add_header Content-Type text/plain;
+            }
+
+            # Proxy /health to backend health endpoint
+            location = /health {
+                proxy_pass http://backend-service:8000/health;
+                proxy_http_version 1.1;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            }
+
+            # Forward all other requests to Streamlit frontend
             location / {
-                proxy_pass http://frontend:8501/;
+                proxy_pass http://frontend-service:8501/;
                 proxy_http_version 1.1;
                 proxy_set_header Host $host;
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header Upgrade $http_upgrade;
                 proxy_set_header Connection "upgrade";
-            }
-
-            # Health check endpoint
-            location /healthz {
-                return 200 'OK';
-                add_header Content-Type text/plain;
             }
         }
 

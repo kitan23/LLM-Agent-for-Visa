@@ -51,17 +51,19 @@ REGION=us-central1
 REPO=opt-rag-docker-repo
 
 # Backend
-docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-backend:v1 -f rag-pipeline/Dockerfile rag-pipeline/
+docker build --platform linux/amd64 -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-backend:v1 -f rag-pipeline/Dockerfile rag-pipeline/
 docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-backend:v1
 
 # Frontend
-docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-frontend:v1 -f streamlit/Dockerfile streamlit/
+docker build --platform linux/amd64 -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-frontend:v1 -f streamlit/Dockerfile streamlit/
 docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-frontend:v1
 
 # NGINX Gateway
-docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-gateway:v1 -f nginx/Dockerfile nginx/
+docker build --platform linux/amd64 -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-gateway:v1 -f nginx/Dockerfile nginx/
 docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-gateway:v1
 ```
+
+> **Important:** The `--platform linux/amd64` flag ensures compatibility with GKE nodes, which typically run on x86_64 architecture. This is especially important if you're building on Apple Silicon (M1/M2/M3) Macs or other ARM-based systems.
 
 ---
 
@@ -70,8 +72,10 @@ docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO/opt-rag-gateway:v1
 ```bash
 gcloud container clusters create opt-rag-cluster \
   --zone=us-central1-a \
-  --num-nodes=3 \
-  --machine-type=e2-standard-4 \
+  --num-nodes=1 \
+  --machine-type=e2-standard-2 \
+  --disk-type=pd-standard \
+  --disk-size=50 \
   --enable-ip-alias
 ```
 
@@ -91,12 +95,12 @@ kubectl create namespace opt-rag
 
 **Install the chart:**
 ```bash
-helm install opt-rag . \
-  --namespace opt-rag \
-  --set images.registry=us-central1-docker.pkg.dev/$PROJECT_ID/$REPO/ \
-  --set services.backend.type=LoadBalancer \
-  --set services.frontend.type=LoadBalancer \
-  --set services.nginx.type=LoadBalancer
+helm upgrade -i opt-rag . \
+    --namespace opt-rag \
+    --set images.registry=us-central1-docker.pkg.dev/$PROJECT_ID/$REPO/ \
+    --set services.backend.type=LoadBalancer \
+    --set services.frontend.type=LoadBalancer \
+    --set services.nginx.type=LoadBalancer
 ```
 
 **(Optional) Upgrade config:**
@@ -112,6 +116,107 @@ helm install opt-rag . \
 - Default sizes: 5Gi (models), 1Gi (vector store).  
   Adjust in `values.yaml` or the manifest if needed.
 - GKE will provision persistent disks automatically.
+
+---
+
+## 6a. Populating Your Model and Vector Store PVCs
+
+Your backend expects the model files in `/app/models` and the vector store in `/app/vector_store` inside the pod. In your repo, these are:
+- **Model files:** `rag-pipeline/models/`
+- **Vector store files:** `rag-pipeline/vector_store/`
+
+You must copy these files into the PVCs before your backend will work. Here are two recommended methods:
+
+### **Option 1: Copy from Google Cloud Storage (GCS) to PVC (Recommended for large files or remote work)**
+
+1. **Upload your files to a GCS bucket:**
+   ```bash
+   gsutil cp rag-pipeline/models/* gs://YOUR_BUCKET/models/
+   gsutil cp rag-pipeline/vector_store/* gs://YOUR_BUCKET/vector_store/
+   ```
+
+2. **Create a copy pod to transfer from GCS to the PVCs:**
+   Save as `model-copy.yaml`:
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: model-copy
+     namespace: opt-rag
+   spec:
+     restartPolicy: Never
+     containers:
+     - name: copy
+       image: google/cloud-sdk:slim
+       command: ["/bin/sh", "-c"]
+       args:
+         - |
+           gsutil -m cp -r gs://YOUR_BUCKET/models/* /models/ && \
+           gsutil -m cp -r gs://YOUR_BUCKET/vector_store/* /vector_store/
+       volumeMounts:
+       - name: models
+         mountPath: /models
+       - name: vector-store
+         mountPath: /vector_store
+     volumes:
+     - name: models
+       persistentVolumeClaim:
+         claimName: models-pvc
+     - name: vector-store
+       persistentVolumeClaim:
+         claimName: vector-store-pvc
+   ```
+
+   Apply and run:
+   ```bash
+   kubectl apply -f model-copy.yaml
+   kubectl logs model-copy -n opt-rag  # Wait for completion
+   kubectl delete pod model-copy -n opt-rag
+   ```
+
+### **Option 2: Copy Directly from Your Local Machine to the PVC (Quick for small/medium files)**
+
+1. **Start a temporary pod that mounts the PVCs:**
+   Save as `pvc-access.yaml`:
+   ```yaml
+   apiVersion: v1
+   kind: Pod
+   metadata:
+     name: pvc-access
+     namespace: opt-rag
+   spec:
+     containers:
+     - name: shell
+       image: ubuntu
+       command: ["/bin/bash", "-c", "sleep 3600"]
+       volumeMounts:
+       - name: models
+         mountPath: /models
+       - name: vector-store
+         mountPath: /vector_store
+     volumes:
+     - name: models
+       persistentVolumeClaim:
+         claimName: models-pvc
+     - name: vector-store
+       persistentVolumeClaim:
+         claimName: vector-store-pvc
+   ```
+   Apply:
+   ```bash
+   kubectl apply -f pvc-access.yaml
+   ```
+
+2. **Copy files from your local machine:**
+   ```bash
+   kubectl cp rag-pipeline/models/. opt-rag/pvc-access:/models
+   kubectl cp rag-pipeline/vector_store/. opt-rag/pvc-access:/vector_store
+   ```
+
+3. **Delete the pod after copying:**
+   ```bash
+   kubectl delete pod pvc-access -n opt-rag
+   ```
 
 ---
 

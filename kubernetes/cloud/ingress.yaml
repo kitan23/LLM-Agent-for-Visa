@@ -43,7 +43,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: gcr.io/visa-llm-assistant/opt-rag-gateway:v1
+        image: us-central1-docker.pkg.dev/visa-llm-assistant/opt-rag-docker-repo/opt-rag-gateway:v1
         imagePullPolicy: Always
         ports:
         - containerPort: 80

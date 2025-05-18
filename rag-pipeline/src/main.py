@@ -288,6 +288,9 @@ async def stream_query_post(request: QueryRequest):
                                 processed_full_response = True
                                 break
                     
+                    # Print each token to stdout for debugging
+                    print(token, end="", flush=True)
+                    
                     # Properly format for SSE, escape any JSON-incompatible characters
                     try:
                         escaped_token = json.dumps(token)

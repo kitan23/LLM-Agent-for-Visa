@@ -7,7 +7,7 @@ fullnameOverride: ""
 
 # Image settings
 images:
-  registry: ""  # For local testing, leave empty; for GCP use "gcr.io/YOUR_PROJECT_ID"
+  registry: "us-central1-docker.pkg.dev/visa-llm-assistant/opt-rag-docker-repo"  # Artifact Registry path
   backend:
     repository: opt-rag-backend
     tag: v1

@@ -1,15 +1,15 @@
 steps:
 # Build the backend image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/opt-rag-backend:v1', '-f', 'rag-pipeline/Dockerfile', 'rag-pipeline/']
+  args: ['build', '--platform', 'linux/amd64', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-backend:v1', '-f', 'rag-pipeline/Dockerfile', 'rag-pipeline/']
 
 # Build the frontend image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/opt-rag-frontend:v1', '-f', 'streamlit/Dockerfile', 'streamlit/']
+  args: ['build', '--platform', 'linux/amd64', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-frontend:v1', '-f', 'streamlit/Dockerfile', 'streamlit/']
 
 # Build the NGINX gateway image
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', 'gcr.io/$PROJECT_ID/opt-rag-gateway:v1', '-f', 'nginx/Dockerfile', 'nginx/']
+  args: ['build', '--platform', 'linux/amd64', '-t', 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-gateway:v1', '-f', 'nginx/Dockerfile', 'nginx/']
 
 # Deploy to GKE
 - name: 'gcr.io/cloud-builders/kubectl'
@@ -49,6 +49,6 @@ steps:
   - 'CLOUDSDK_CONTAINER_CLUSTER=opt-rag-cluster'
 
 images:
-- 'gcr.io/$PROJECT_ID/opt-rag-backend:v1'
-- 'gcr.io/$PROJECT_ID/opt-rag-frontend:v1'
-- 'gcr.io/$PROJECT_ID/opt-rag-gateway:v1' 
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-backend:v1'
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-frontend:v1'
+- 'us-central1-docker.pkg.dev/$PROJECT_ID/opt-rag-docker-repo/opt-rag-gateway:v1' 
