@@ -20,3 +20,6 @@ sentence-transformers>=2.2.0
 langchain-huggingface>=0.0.1
 accelerate>=0.25.0
 bitsandbytes>=0.42.0
+# NEW: API-based LLM support
+openai>=1.3.0
+httpx-sse>=0.4.0

@@ -5,6 +5,8 @@ This module serves as the entrypoint for the FastAPI application that powers
 the OPT-RAG International Student Visa Assistant.
 """
 
+from dotenv import load_dotenv
+load_dotenv(dotenv_path="../.env")
 import logging
 import os
 from typing import Dict, Any, Optional, List
@@ -100,29 +102,58 @@ active_generations = {}
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize resources on application startup"""
+    """Initialize resources on application startup
+    
+    UPDATED: Now supports both local model and API-based modes.
+    Set USE_API_LLM=true to use API-based mode.
+    """
     global assistant 
     logger.info("Initializing OPT-RAG Assistant")
 
     # Initialize metrics with application info
     initialize_metrics(APP_VERSION, APP_MODEL_NAME)
 
+    print("USE_API_LLM: ", os.environ.get("USE_API_LLM", "false").lower() == "true")
+
     try: 
+        # Check which mode to use
+        use_api_llm = settings.use_api_llm
+        
+        if use_api_llm:
+            logger.info("=== STARTING IN API-BASED LLM MODE ===")
+            # API mode - model_path and device are not used but required for compatibility
+            model_path = os.environ.get("MODEL_PATH", "api-mode")  # Placeholder
+            vector_store_path = os.environ.get("VECTOR_STORE_PATH", settings.vector_store_path)
+            
+            # API configuration
+            api_provider = os.environ.get("LLM_API_PROVIDER", "openai")
+            api_model = os.environ.get("LLM_API_MODEL", "gpt-4o-nano")
+            logger.info(f"Using API provider: {api_provider}, model: {api_model}")
+                    
+        else:
+            logger.info("=== STARTING IN LOCAL MODEL MODE ===")
+        # ===== ORIGINAL LOCAL MODEL CONFIGURATION (PRESERVED) =====
         model_path = os.environ.get("MODEL_PATH", settings.model_path)
         vector_store_path = os.environ.get("VECTOR_STORE_PATH", settings.vector_store_path)
         device = os.environ.get("DEVICE", settings.device)
+
+        logger.info(f"Using model at {model_path}")
+        logger.info(f"Using device: {device}")
         
-        logger.info(f"Initializing OPT-RAG Assistant with model at {model_path}")
+        # Common configuration for both modes
         logger.info(f"Using vector store at {vector_store_path}")
         
+        # Initialize assistant (handles both modes internally)
         assistant = OPTRagAssistant(
             model_path=model_path, 
             vector_store_path=vector_store_path, 
-            device=device
+            device=device if not use_api_llm else None  # Device only needed for local mode
         )
         logger.info("OPT-RAG Assistant initialized successfully")
+        
     except Exception as e:
-        logger.error(f"Failed to initialize OPT-RAG assistant {e}")
+        logger.error(f"Failed to initialize OPT-RAG assistant: {e}")
+        # In production, you might want to exit here or provide a fallback
 
 # Add routes to both the main app and the API router
 # This maintains backward compatibility while also supporting /api/* routes

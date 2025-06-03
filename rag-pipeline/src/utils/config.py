@@ -23,10 +23,20 @@ class Settings(BaseSettings):
     vector_store_path: str = "./vector_store"
     device: Optional[str] = None  # Auto-detect if None
     
+    # API-based LLM settings
+    use_api_llm: bool = True
+    llm_api_provider: str = "openai"
+    llm_api_key: Optional[str] = None
+    llm_api_model: str = "gpt-4o-nano"
+    llm_api_base_url: Optional[str] = None
+    
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
+    
+    # Tracing settings
+    otlp_endpoint: str = "http://localhost:4317"
     
     # Application settings
     app_name: str = "OPT-RAG International Student Visa Assistant"

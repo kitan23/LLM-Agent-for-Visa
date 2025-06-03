@@ -3,6 +3,9 @@ OPT-RAG Assistant Implementation
 
 This module contains the core implementation of the OPT-RAG International Student 
 Visa Assistant, handling model loading, vector store management, and query processing.
+
+UPDATED: Now supports both local model inference and API-based inference (OpenAI, etc.)
+Set USE_API_LLM=true environment variable to use API-based mode.
 """
 
 
@@ -10,14 +13,24 @@ import logging
 import time
 import asyncio
 import threading
+import os
 from typing import Dict, Any, Optional, AsyncIterator, Iterator, Union, List
 from pathlib import Path
 from threading import Event
 
+# ===== LOCAL MODEL IMPORTS (Original Implementation) =====
+# These imports are used when USE_API_LLM=false (default behavior)
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
 from langchain_core.prompts import ChatPromptTemplate
 from opentelemetry import trace
+
+# ===== API-BASED MODEL IMPORTS (New Implementation) =====
+# These imports are used when USE_API_LLM=true
+import openai
+from openai import OpenAI
+import httpx
+import json
 
 from src.llm.callbacks import AsyncStreamingCallbackHandler
 from src.llm.direct_streamer import DirectStreamer
@@ -33,7 +46,12 @@ tracer = get_tracer("opt_rag.assistant")
 
 
 class OPTRagAssistant: 
-    """OPT-RAG International Student Visa Assistant using RAG architecture."""
+    """OPT-RAG International Student Visa Assistant using RAG architecture.
+    
+    UPDATED: Now supports both local model inference and API-based inference.
+    - Set USE_API_LLM=true to use API-based mode (OpenAI, Anthropic, etc.)
+    - Set USE_API_LLM=false (default) to use local model mode
+    """
 
     def __init__(
         self, 
@@ -45,39 +63,91 @@ class OPTRagAssistant:
         """Initialize the OPT-RAG Assistant.
         
         Args:
-            model_path: Path to the downloaded LLM model
+            model_path: Path to the downloaded LLM model (used only in local mode)
             vector_store_path: Path to FAISS vector store
-            device: Device to use (cuda, mps, cpu, or None for auto-detection)
+            device: Device to use (cuda, mps, cpu, or None for auto-detection) - used only in local mode
+            embedding_model_name: Sentence transformer model for embeddings
         """
         with tracer.start_as_current_span("initialize_opt_rag_assistant"):
             start_time = time.time()
+            
+            # Common initialization for both modes
             self.model_path = Path(model_path)
             self.vector_store_path = Path(vector_store_path)
             self.embedding_model_name = embedding_model_name
 
-            # Detect hardware if not specified
-            self.device = device or self._detect_hardware()
+            # Check if we should use API-based LLM
+            self.use_api_llm = os.getenv("USE_API_LLM", "false").lower() == "true"
+            
+            if self.use_api_llm:
+                logger.info("=== USING API-BASED LLM MODE ===")
+                self._init_api_mode()
+            else:
+                logger.info("=== USING LOCAL MODEL MODE ===")
+                self._init_local_mode(device)
 
-            logger.info(f"Using device: {self.device}")
-
-            # initialize components 
-            self.tokenizer = self._load_tokenizer()
-            self.model = self._load_model()
+            # Common initialization: Vector store (used by both modes)
             self.vector_store = self._load_vector_store()
 
-            # Store prompt template
+            # Store prompt template (used by both modes)
             self.visa_prompt = self._create_prompt_template()
 
             # Record load time 
             load_time = time.time() - start_time
             MODEL_LOAD_TIME.observe(load_time)
 
-
             # Update vector count metric 
             if hasattr(self.vector_store, "index"):
                 VECTOR_COUNT.set(self.vector_store.index.ntotal)
 
             logger.info("OPT-RAG Assistant initialized successfully")
+
+    def _init_api_mode(self):
+        """Initialize API-based LLM mode."""
+        logger.info("Initializing API-based LLM mode")
+        
+        # Get API configuration from environment variables
+        self.api_provider = os.getenv("LLM_API_PROVIDER", "openai").lower()
+        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.api_model = os.getenv("LLM_API_MODEL", "gpt-4o-mini")
+        self.api_base_url = os.getenv("LLM_API_BASE_URL")  # For custom endpoints
+        
+        if not self.api_key:
+            raise ValueError("LLM_API_KEY or OPENAI_API_KEY environment variable is required for API mode")
+        
+        # Initialize API client based on provider
+        if self.api_provider == "openai":
+            self.api_client = OpenAI(
+                api_key=self.api_key,
+                base_url=self.api_base_url  # None is fine for OpenAI's default endpoint
+            )
+            logger.info(f"Initialized OpenAI client with model: {self.api_model}")
+        else:
+            # Future: Add support for other providers (Anthropic, etc.)
+            raise ValueError(f"Unsupported API provider: {self.api_provider}")
+        
+        # API mode doesn't need tokenizer, model, or device
+        self.tokenizer = None
+        self.model = None
+        self.device = None
+
+    def _init_local_mode(self, device: Optional[str] = None):
+        """Initialize local model mode (original implementation)."""
+        logger.info("Initializing local model mode")
+        
+        # ===== ORIGINAL LOCAL MODEL INITIALIZATION (PRESERVED AS ACTIVE CODE) =====
+        # Detect hardware if not specified
+        self.device = device or self._detect_hardware()
+        logger.info(f"Using device: {self.device}")
+
+        # Initialize local model components 
+        self.tokenizer = self._load_tokenizer()
+        self.model = self._load_model()
+        
+        # API mode variables (set to None for local mode)
+        self.api_client = None
+        self.api_provider = None
+        self.api_model = None
 
     def _detect_hardware(self) -> str:
         """Detect the hardware device to use for inference."""
@@ -362,9 +432,11 @@ class OPTRagAssistant:
     def answer_question(self, query: str, stream: bool = False) -> Dict[str, Any]:
         """Answer a question using the RAG pipeline.
         
+        UPDATED: Now supports both local model and API-based inference.
+        
         Args:
             query: User's question
-            stream: Whether to stream the response
+            stream: Whether to stream the response (not used in API mode for this method)
             
         Returns:
             Dictionary with the answer and processing time
@@ -372,6 +444,7 @@ class OPTRagAssistant:
         with tracer.start_as_current_span("answer_question") as span:
             span.set_attribute("query", query)
             span.set_attribute("stream", stream)
+            span.set_attribute("use_api_llm", self.use_api_llm)
             
             start_time = time.time()
             status = "success"
@@ -381,7 +454,7 @@ class OPTRagAssistant:
                 # Record query count (starting)
                 QUERY_COUNT.labels(status="started", query_type="standard").inc()
                 
-                # Retrieve relevant context
+                # Retrieve relevant context (SAME FOR BOTH MODES)
                 with tracer.start_as_current_span("retrieve_context"):
                     retrieval_start = time.time()
                     
@@ -397,71 +470,96 @@ class OPTRagAssistant:
                     VECTOR_RETRIEVAL_LATENCY.observe(retrieval_time)
                     span.set_attribute("retrieval_time", retrieval_time)
                 
-                # Prepare prompt with context and question
+                # Prepare prompt with context and question (SAME FOR BOTH MODES)
                 with tracer.start_as_current_span("prepare_prompt"):
                     prompt = self.visa_prompt.format(
                         context=context,
                         question=query
                     )
-                    messages = [{"role": "user", "content": prompt}]
-                    
-                # Generate LLM response
-                with tracer.start_as_current_span("generate_answer") as gen_span:
-                    gen_span.set_attribute("model_name", str(self.model_path).split('/')[-1])
-                    
-                    if stream:
-                        # Streaming response
-                        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
-                        gen_thread = threading.Thread(
-                            target=self._generate_response,
-                            args=(messages, streamer)
-                        )
-                        gen_thread.start()
-                        
-                        response_text = ""
-                        for response_chunk in streamer:
-                            response_text += response_chunk
-                            
-                    else:
-                        # Standard response
-                        inputs = self.tokenizer.apply_chat_template(
-                            messages,
-                            add_generation_prompt=True,
-                            return_tensors="pt"
-                        ).to(self.device)
-                        
-                        outputs = self.model.generate(
-                            inputs,
-                            max_new_tokens=1024,
-                            temperature=0.7,
-                            top_p=0.9,
-                            repetition_penalty=1.1,
-                            do_sample=True
-                        )
-                        
-                        response_text = self.tokenizer.decode(
-                            outputs[0][inputs.shape[1]:],
-                            skip_special_tokens=True
-                        )
                 
-                # Calculate total processing time
+                # Generate LLM response (DIFFERENT FOR EACH MODE)
+                if self.use_api_llm:
+                    # ===== NEW: API-BASED RESPONSE GENERATION =====
+                    with tracer.start_as_current_span("generate_api_answer") as gen_span:
+                        gen_span.set_attribute("api_provider", self.api_provider)
+                        gen_span.set_attribute("api_model", self.api_model)
+                        
+                        # Prepare messages for API
+                        messages = [{"role": "user", "content": prompt}]
+                        
+                        # Call API
+                        if self.api_provider == "openai":
+                            response = self.api_client.chat.completions.create(
+                                model=self.api_model,
+                                messages=messages,
+                                max_tokens=1024,
+                                temperature=0.7,
+                                top_p=0.9
+                            )
+                            response_text = response.choices[0].message.content
+                        else:
+                            raise ValueError(f"Unsupported API provider: {self.api_provider}")
+                
+                else:
+                    # ===== ORIGINAL: LOCAL MODEL RESPONSE GENERATION (PRESERVED) =====
+                    with tracer.start_as_current_span("generate_answer") as gen_span:
+                        gen_span.set_attribute("model_name", str(self.model_path).split('/')[-1])
+                        
+                        messages = [{"role": "user", "content": prompt}]
+                        
+                        if stream:
+                            # Streaming response (LOCAL MODEL ONLY)
+                            streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+                            gen_thread = threading.Thread(
+                                target=self._generate_response,
+                                args=(messages, streamer)
+                            )
+                            gen_thread.start()
+                            
+                            response_text = ""
+                            for response_chunk in streamer:
+                                response_text += response_chunk
+                                
+                        else:
+                            # Standard response (LOCAL MODEL ONLY)
+                            inputs = self.tokenizer.apply_chat_template(
+                                messages,
+                                add_generation_prompt=True,
+                                return_tensors="pt"
+                            ).to(self.device)
+                            
+                            outputs = self.model.generate(
+                                inputs,
+                                max_new_tokens=1024,
+                                temperature=0.7,
+                                top_p=0.9,
+                                repetition_penalty=1.1,
+                                do_sample=True
+                            )
+                            
+                            response_text = self.tokenizer.decode(
+                                outputs[0][inputs.shape[1]:],
+                                skip_special_tokens=True
+                            )
+                
+                # Calculate total processing time (SAME FOR BOTH MODES)
                 processing_time = time.time() - start_time
                 
-                # Record metrics
+                # Record metrics (SAME FOR BOTH MODES)
                 QUERY_LATENCY.observe(processing_time)
                 QUERY_COUNT.labels(status="success", query_type="standard").inc()
                 
                 # Add processing time to the span
                 span.set_attribute("processing_time", processing_time)
                 
-                # Return result
+                # Return result (SAME FOR BOTH MODES)
                 return {
                     "answer": response_text,
                     "processing_time": processing_time
                 }
                 
             except Exception as e:
-                # Record failure
+                # Record failure (SAME FOR BOTH MODES)
                 status = "error"
                 error_type = type(e).__name__
                 
@@ -506,6 +604,8 @@ class OPTRagAssistant:
     async def astream_response(self, query: str, cancel_event: Optional[threading.Event] = None) -> AsyncIterator[str]:
         """Stream response to a question asynchronously.
         
+        UPDATED: Now supports both local model and API-based streaming.
+        
         Args:
             query: User's question
             cancel_event: Optional event that can be set to cancel generation
@@ -515,19 +615,17 @@ class OPTRagAssistant:
         """
         with tracer.start_as_current_span("astream_response") as span:
             span.set_attribute("query", query)
+            span.set_attribute("use_api_llm", self.use_api_llm)
             
             start_time = time.time()
             status = "success"
             error_type = None
             
             try:
-                # Record query count (starting)
+                # Record query count (starting) - SAME FOR BOTH MODES
                 QUERY_COUNT.labels(status="started", query_type="streaming").inc()
                 
-                # Create direct streamer for token streaming
-                direct_streamer = DirectStreamer(self.model, self.tokenizer, self.device)
-                
-                # Retrieve relevant context
+                # Retrieve relevant context - SAME FOR BOTH MODES
                 with tracer.start_as_current_span("retrieve_context"):
                     # Check early for cancellation
                     if cancel_event and cancel_event.is_set():
@@ -557,14 +655,14 @@ class OPTRagAssistant:
                     VECTOR_RETRIEVAL_LATENCY.observe(retrieval_time)
                     span.set_attribute("retrieval_time", retrieval_time)
                 
-                # Check again for cancellation
+                # Check again for cancellation - SAME FOR BOTH MODES
                 if cancel_event and cancel_event.is_set():
                     logger.info("Generation cancelled after context retrieval")
                     status = "cancelled"
                     QUERY_COUNT.labels(status="cancelled", query_type="streaming").inc()
                     return
                 
-                # Prepare prompt with context and question
+                # Prepare prompt with context and question - SAME FOR BOTH MODES
                 with tracer.start_as_current_span("prepare_prompt"):
                     prompt = self.visa_prompt.format(
                         context=context,
@@ -572,8 +670,52 @@ class OPTRagAssistant:
                     )
                     logger.info("Prepared prompt for streaming generation")
                 
-                # Generate streaming response using direct streamer
-                with tracer.start_as_current_span("generate_streaming_answer"):
+                # Generate streaming response - DIFFERENT FOR EACH MODE
+                if self.use_api_llm:
+                    # ===== NEW: API-BASED STREAMING =====
+                    with tracer.start_as_current_span("generate_api_streaming_answer"):
+                        logger.info("Starting API-based streaming generation")
+                        
+                        # Prepare messages for API
+                        messages = [{"role": "user", "content": prompt}]
+                        token_count = 0
+                        
+                        if self.api_provider == "openai":
+                            # Use OpenAI streaming
+                            stream = self.api_client.chat.completions.create(
+                                model=self.api_model,
+                                messages=messages,
+                                max_tokens=1024,
+                                temperature=0.7,
+                                top_p=0.9,
+                                stream=True
+                            )
+                            
+                            for chunk in stream:
+                                # Check for cancellation
+                                if cancel_event and cancel_event.is_set():
+                                    logger.info(f"API streaming cancelled after {token_count} tokens")
+                                    status = "cancelled"
+                                    break
+                                
+                                # Extract content from chunk
+                                if chunk.choices[0].delta.content:
+                                    content = chunk.choices[0].delta.content
+                                    token_count += 1
+                                    if token_count % 10 == 0:
+                                        logger.info(f"Streamed {token_count} API tokens so far")
+                                    yield content
+                        else:
+                            raise ValueError(f"Streaming not supported for API provider: {self.api_provider}")
+                        
+                        logger.info(f"API streaming complete. Total tokens: {token_count}")
+                
+                else:
+                    # ===== ORIGINAL: LOCAL MODEL STREAMING (PRESERVED) =====
+                    with tracer.start_as_current_span("generate_streaming_answer"):
+                        # Create direct streamer for token streaming
+                        direct_streamer = DirectStreamer(self.model, self.tokenizer, self.device)
+                        
                     # Start streaming tokens
                     logger.info("Starting to stream tokens with direct streamer")
                     token_count = 0
@@ -591,9 +733,9 @@ class OPTRagAssistant:
                             logger.info(f"Streamed {token_count} tokens so far")
                         yield token
                     
-                    logger.info(f"Streaming complete. Total tokens: {token_count}")
+                        logger.info(f"Local streaming complete. Total tokens: {token_count}")
                 
-                # Record metrics
+                # Record metrics - SAME FOR BOTH MODES
                 processing_time = time.time() - start_time
                 QUERY_LATENCY.observe(processing_time)
                 QUERY_COUNT.labels(status=status, query_type="streaming").inc()
@@ -602,7 +744,7 @@ class OPTRagAssistant:
                 span.set_attribute("processing_time", processing_time)
                 
             except Exception as e:
-                # Record failure
+                # Record failure - SAME FOR BOTH MODES
                 status = "error"
                 error_type = type(e).__name__
                 
