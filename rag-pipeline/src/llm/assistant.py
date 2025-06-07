@@ -38,6 +38,7 @@ from src.utils.metrics import QUERY_LATENCY, QUERY_COUNT, MODEL_LOAD_TIME, VECTO
 from src.retriever.vector_store import load_vector_store, build_vector_store
 from src.document_processor.pipeline import process_documents
 from src.utils.tracing import get_tracer
+from src.utils.config import get_settings
 
 logger = logging.getLogger("opt_rag.assistant")
 
@@ -71,19 +72,24 @@ class OPTRagAssistant:
         with tracer.start_as_current_span("initialize_opt_rag_assistant"):
             start_time = time.time()
             
+            # Load settings
+            self.settings = get_settings()
+            
             # Common initialization for both modes
-            self.model_path = Path(model_path)
             self.vector_store_path = Path(vector_store_path)
             self.embedding_model_name = embedding_model_name
 
-            # Check if we should use API-based LLM
-            self.use_api_llm = os.getenv("USE_API_LLM", "false").lower() == "true"
+            # Check if we should use API-based LLM from settings
+            self.use_api_llm = self.settings.use_api_llm
             
             if self.use_api_llm:
                 logger.info("=== USING API-BASED LLM MODE ===")
                 self._init_api_mode()
+                # Set model_path to None since we don't need it in API mode
+                self.model_path = None
             else:
                 logger.info("=== USING LOCAL MODEL MODE ===")
+                self.model_path = Path(model_path)
                 self._init_local_mode(device)
 
             # Common initialization: Vector store (used by both modes)
@@ -106,14 +112,22 @@ class OPTRagAssistant:
         """Initialize API-based LLM mode."""
         logger.info("Initializing API-based LLM mode")
         
-        # Get API configuration from environment variables
-        self.api_provider = os.getenv("LLM_API_PROVIDER", "openai").lower()
-        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.api_model = os.getenv("LLM_API_MODEL", "gpt-4o-mini")
-        self.api_base_url = os.getenv("LLM_API_BASE_URL")  # For custom endpoints
+        # Get API configuration from settings
+        self.api_provider = self.settings.llm_api_provider
+        self.api_model = self.settings.llm_api_model
+        self.api_base_url = self.settings.llm_api_base_url
+        
+        # FIXED: Directly read API key from environment variables with explicit fallback
+        self.api_key = (
+            os.environ.get("OPENAI_API_KEY") or 
+            os.environ.get("OPT_RAG_LLM_API_KEY") or
+            self.settings.llm_api_key
+        )
         
         if not self.api_key:
-            raise ValueError("LLM_API_KEY or OPENAI_API_KEY environment variable is required for API mode")
+            raise ValueError("API key not found! Please set OPENAI_API_KEY or OPT_RAG_LLM_API_KEY environment variable")
+        
+        logger.info(f"Using API key from environment (length: {len(self.api_key)} chars)")
         
         # Initialize API client based on provider
         if self.api_provider == "openai":
@@ -130,12 +144,15 @@ class OPTRagAssistant:
         self.tokenizer = None
         self.model = None
         self.device = None
+        logger.info("API mode initialization complete")
 
     def _init_local_mode(self, device: Optional[str] = None):
         """Initialize local model mode (original implementation)."""
         logger.info("Initializing local model mode")
         
-        # ===== ORIGINAL LOCAL MODEL INITIALIZATION (PRESERVED AS ACTIVE CODE) =====
+        if not self.model_path or not self.model_path.exists():
+            raise ValueError(f"Model path {self.model_path} does not exist")
+            
         # Detect hardware if not specified
         self.device = device or self._detect_hardware()
         logger.info(f"Using device: {self.device}")
@@ -148,6 +165,7 @@ class OPTRagAssistant:
         self.api_client = None
         self.api_provider = None
         self.api_model = None
+        logger.info("Local mode initialization complete")
 
     def _detect_hardware(self) -> str:
         """Detect the hardware device to use for inference."""
