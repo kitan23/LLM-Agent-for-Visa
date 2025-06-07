@@ -11,6 +11,131 @@ The OPT-RAG application uses retrieval-augmented generation to provide accurate 
 - **API Gateway (NGINX)**: Routes requests between services
 - **Monitoring Stack**: Prometheus, Grafana, and Jaeger for observability
 
+## System Architecture
+
+```mermaid
+graph TB
+    %% User Layer
+    User[👤 International Student]
+    
+    %% Frontend Layer
+    subgraph "Frontend Layer"
+        UI[🖥️ Streamlit UI<br/>Port: 8501]
+    end
+    
+    %% API Gateway Layer
+    subgraph "API Gateway"
+        NGINX[🌐 NGINX Gateway<br/>Load Balancer & Routing]
+    end
+    
+    %% Backend Services Layer
+    subgraph "Backend Services"
+        API[🚀 FastAPI Backend<br/>Port: 8000]
+        
+        subgraph "RAG Pipeline Components"
+            DOC[📄 Document Processor<br/>PDF & Text Processing]
+            EMB[🧠 Embeddings Generator<br/>Vector Creation]
+            RET[🔍 Retriever<br/>Context Search]
+            LLM[🤖 LLM Assistant<br/>Response Generation]
+        end
+    end
+    
+    %% Data Storage Layer
+    subgraph "Data Layer"
+        VS[💾 Vector Store<br/>FAISS Database]
+        DOCS[📚 Document Storage<br/>PDF Files & Examples]
+    end
+    
+    %% External Services
+    subgraph "External APIs"
+        OPENAI[🌟 OpenAI API<br/>GPT-4o-mini]
+    end
+    
+    %% Monitoring Stack
+    subgraph "Observability Stack"
+        PROM[📊 Prometheus<br/>Metrics Collection]
+        GRAF[📈 Grafana<br/>Dashboards & Alerts]
+        JAEG[🔍 Jaeger<br/>Distributed Tracing]
+    end
+    
+    %% Kubernetes Infrastructure
+    subgraph "Kubernetes Infrastructure"
+        subgraph "Persistent Storage"
+            PVC[💿 Persistent Volume<br/>Vector Store Data]
+        end
+        
+        subgraph "Secrets Management"
+            SEC[🔐 Kubernetes Secrets<br/>API Keys & Config]
+        end
+    end
+    
+    %% User Flow
+    User --> UI
+    UI --> NGINX
+    NGINX --> API
+    
+    %% RAG Pipeline Flow
+    API --> DOC
+    DOC --> EMB
+    EMB --> VS
+    API --> RET
+    RET --> VS
+    RET --> LLM
+    LLM --> OPENAI
+    
+    %% Data Persistence
+    DOC --> DOCS
+    EMB --> PVC
+    VS --> PVC
+    
+    %% Configuration
+    API --> SEC
+    LLM --> SEC
+    
+    %% Monitoring Flow
+    API --> PROM
+    UI --> PROM
+    NGINX --> PROM
+    PROM --> GRAF
+    API --> JAEG
+    LLM --> JAEG
+    
+    %% Document Upload Flow
+    User -.->|"📤 Upload PDFs"| UI
+    UI -.->|"Process Documents"| DOC
+    DOC -.->|"Generate Embeddings"| EMB
+    
+    %% Query Flow
+    User -.->|"❓ Ask Question"| UI
+    RET -.->|"🔍 Find Relevant Context"| VS
+    LLM -.->|"📝 Generate Response"| User
+    
+    %% Styling
+    classDef userClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef frontendClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef gatewayClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef backendClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef dataClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef externalClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
+    classDef monitoringClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+    classDef infraClass fill:#fafafa,stroke:#424242,stroke-width:2px
+    
+    class User userClass
+    class UI frontendClass
+    class NGINX gatewayClass
+    class API,DOC,EMB,RET,LLM backendClass
+    class VS,DOCS,PVC dataClass
+    class OPENAI externalClass
+    class PROM,GRAF,JAEG monitoringClass
+    class SEC infraClass
+```
+
+The diagram above illustrates the complete system architecture showing:
+- **User Flow**: Solid lines representing the main request flow
+- **Data Flow**: Dotted lines showing document processing and query handling
+- **Components**: All major services including RAG pipeline, monitoring, and infrastructure
+- **Infrastructure**: Kubernetes-based deployment with persistent storage and secrets management
+
 ## Getting Started
 
 ### Prerequisites
