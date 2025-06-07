@@ -144,25 +144,311 @@ The diagram above illustrates the complete system architecture showing:
 - [Docker Compose](https://docs.docker.com/compose/install/)
 - For cloud deployment: [Google Cloud SDK](https://cloud.google.com/sdk/docs/install)
 
-### Local Development
+## 🚀 Local Setup & Development
 
-1. Clone the repository:
-   ```
-   git clone <repository-url>
-   cd OPT-RAG
-   ```
+This section provides comprehensive instructions for running OPT-RAG locally on your development machine. You can choose between two modes:
 
-2. Start the application using Docker Compose:
-   ```
-   docker-compose up -d
-   ```
+### **Option 1: API Mode (Recommended - Faster Setup)**
+Uses OpenAI's GPT-4o-mini model via API calls.
 
-3. Access the services:
-   - Frontend: http://localhost:8501
-   - Backend API: http://localhost:8000/docs
-   - Prometheus: http://localhost:9090
-   - Grafana: http://localhost:3000
-   - Jaeger: http://localhost:16686
+### **Option 2: Local Model Mode**
+Downloads and runs a local language model (Qwen2.5-1.5B).
+
+---
+
+## 🏃‍♂️ Quick Start (API Mode)
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- OpenAI API key (get one from [OpenAI Platform](https://platform.openai.com/api-keys))
+
+### Step 1: Clone the Repository
+```bash
+git clone <repository-url>
+cd OPT-RAG
+```
+
+### Step 2: Set Up Environment Variables
+Create a `.env` file in the root directory:
+```bash
+# Create .env file with your OpenAI API key
+echo "OPENAI_API_KEY=your_openai_api_key_here" > .env
+
+# Or alternatively, set the environment variable
+export OPENAI_API_KEY="your_openai_api_key_here"
+```
+
+### Step 3: Enable Backend Service
+Uncomment the backend service in `docker-compose.yml`:
+```bash
+# Edit docker-compose.yml to uncomment the 'api' service section
+# Lines 18-36 should be uncommented
+```
+
+### Step 4: Start the Application
+```bash
+# Start all services
+docker-compose up -d
+
+# Check if services are running
+docker-compose ps
+```
+
+### Step 5: Access the Application
+- **Frontend UI**: http://localhost:8501
+- **Backend API**: http://localhost:8000/docs
+- **Monitoring**:
+  - Prometheus: http://localhost:9090
+  - Grafana: http://localhost:3000 (admin/admin)
+  - Jaeger: http://localhost:16686
+
+---
+
+## 📚 Local Model Setup (Alternative Option)
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- At least 8GB RAM and 10GB free disk space
+- Python 3.10+ (for model downloading)
+
+### Step 1: Clone the Repository
+```bash
+git clone <repository-url>
+cd OPT-RAG
+```
+
+### Step 2: Download Local Model
+```bash
+# Create models directory
+mkdir -p rag-pipeline/models
+
+# Option A: Download using Python
+pip install huggingface-hub
+python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen2.5-1.5B', local_dir='./rag-pipeline/models/qwen2.5-1.5b')"
+
+# Option B: Download using Git LFS (alternative)
+cd rag-pipeline/models
+git lfs install
+git clone https://huggingface.co/Qwen/Qwen2.5-1.5B qwen2.5-1.5b
+cd ../..
+```
+
+### Step 3: Configure for Local Model
+Edit `docker-compose.yml` to uncomment the backend service and set local model configuration:
+```yaml
+# Uncomment the 'api' service section (lines 18-36)
+# Ensure environment variables are set for local model:
+environment:
+  - MODEL_PATH=/app/models/qwen2.5-1.5b
+  - VECTOR_STORE_PATH=/app/vector_store
+  - DEVICE=cpu
+  - OTLP_ENDPOINT=http://jaeger:4317
+  - OPT_RAG_USE_API_LLM=false  # This enables local model mode
+```
+
+### Step 4: Start the Application
+```bash
+# Start all services
+docker-compose up -d
+
+# Monitor logs to see model loading progress
+docker-compose logs -f api
+```
+
+### Step 5: Access the Application
+Same as API mode - check the Quick Start section above.
+
+---
+
+## 🔧 Configuration Options
+
+### Environment Variables
+You can configure the application using environment variables:
+
+```bash
+# API Mode Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPT_RAG_USE_API_LLM=true
+OPT_RAG_LLM_API_MODEL=gpt-4o-mini
+OPT_RAG_LLM_API_PROVIDER=openai
+
+# Local Model Configuration
+OPT_RAG_USE_API_LLM=false
+OPT_RAG_MODEL_PATH=./models/qwen2.5-1.5b
+OPT_RAG_DEVICE=cpu
+
+# Server Configuration
+OPT_RAG_HOST=0.0.0.0
+OPT_RAG_PORT=8000
+OPT_RAG_LOG_LEVEL=INFO
+
+# Vector Store Configuration
+OPT_RAG_VECTOR_STORE_PATH=./vector_store
+```
+
+### Docker Compose Service Configuration
+The application consists of several services:
+
+- **api**: FastAPI backend with RAG pipeline
+- **streamlit-ui**: Streamlit frontend interface
+- **nginx**: API Gateway and load balancer
+- **prometheus**: Metrics collection
+- **grafana**: Dashboard and visualization
+- **jaeger**: Distributed tracing
+
+---
+
+## 📤 Document Upload & Processing
+
+### Upload Documents via UI
+1. Go to http://localhost:8501
+2. Use the sidebar to upload PDF documents
+3. Documents will be processed and added to the vector store
+4. You can then ask questions about the uploaded content
+
+### Upload Documents via API
+```bash
+# Upload a document via API
+curl -X POST "http://localhost:8000/upload" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@/path/to/your/document.pdf"
+```
+
+### Pre-populate with Sample Documents
+```bash
+# Copy sample documents to the upload directory
+cp path/to/your/visa-documents/* rag-pipeline/uploaded_pdfs/
+
+# Restart the backend to process new documents
+docker-compose restart api
+```
+
+---
+
+## 🔍 Testing & Validation
+
+### Health Checks
+```bash
+# Check backend health
+curl http://localhost:8000/health
+
+# Check frontend
+curl http://localhost:8501
+
+# Check all services
+docker-compose ps
+```
+
+### Test API Endpoints
+```bash
+# Get available endpoints
+curl http://localhost:8000/docs
+
+# Test query endpoint
+curl -X POST "http://localhost:8000/query" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What is OPT?", "conversation_id": "test"}'
+```
+
+### Monitor Logs
+```bash
+# View all logs
+docker-compose logs
+
+# View specific service logs
+docker-compose logs -f api
+docker-compose logs -f streamlit-ui
+docker-compose logs -f nginx
+```
+
+---
+
+## 🛠️ Troubleshooting
+
+### Common Issues
+
+#### 1. Backend Not Starting
+```bash
+# Check logs
+docker-compose logs api
+
+# Common fixes:
+# - Ensure OpenAI API key is set (API mode)
+# - Ensure model files exist (Local model mode)
+# - Check port 8000 is not in use
+```
+
+#### 2. Frontend Can't Connect to Backend
+```bash
+# Check if backend is running
+curl http://localhost:8000/health
+
+# Check docker network
+docker network ls
+docker network inspect opt-rag_opt-rag-network
+```
+
+#### 3. Model Loading Issues (Local Mode)
+```bash
+# Check if model files exist
+ls -la rag-pipeline/models/qwen2.5-1.5b/
+
+# Check available disk space
+df -h
+
+# Monitor model loading
+docker-compose logs -f api | grep -i model
+```
+
+#### 4. Port Conflicts
+```bash
+# Check if ports are in use
+lsof -i :8000  # Backend
+lsof -i :8501  # Frontend
+lsof -i :80    # NGINX
+
+# Use different ports in docker-compose.yml if needed
+```
+
+### Performance Optimization
+
+#### For API Mode:
+- Use faster OpenAI models (gpt-3.5-turbo) for development
+- Implement response caching
+- Optimize vector store size
+
+#### For Local Model Mode:
+- Increase Docker memory limit
+- Use GPU if available (modify Dockerfile)
+- Use quantized models for better performance
+
+---
+
+## 🧹 Cleanup
+
+### Stop Services
+```bash
+# Stop all services
+docker-compose down
+
+# Stop and remove volumes
+docker-compose down -v
+
+# Remove built images
+docker-compose down --rmi all
+```
+
+### Clean Up Resources
+```bash
+# Remove downloaded models (if using local mode)
+rm -rf rag-pipeline/models/
+
+# Remove vector store
+rm -rf rag-pipeline/vector_store/
+
+# Remove uploaded documents
+rm -rf rag-pipeline/uploaded_pdfs/
+```
 
 ### Cloud Deployment (GKE)
 
