@@ -50,6 +50,7 @@ logs/
 # Testing
 .coverage
 htmlcov/
+.pytest_cache/
 
 # Monitoring data
 prometheus/data/
@@ -67,3 +68,15 @@ jenkins/jenkins-config/secrets/
 # OS specific
 .DS_Store
 Thumbs.db
+
+# Temporary and backup files
+*.tmp
+*.bak
+*.old
+*~
+*.orig
+*.cache
+.cache/
+
+# Model cache directories
+*/.cache/
