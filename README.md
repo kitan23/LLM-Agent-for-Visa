@@ -110,24 +110,24 @@ graph TB
     RET -.->|"🔍 Find Relevant Context"| VS
     LLM -.->|"📝 Generate Response"| User
     
-    %% Styling
-    classDef userClass fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef frontendClass fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef gatewayClass fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
-    classDef backendClass fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef dataClass fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    classDef externalClass fill:#e0f2f1,stroke:#004d40,stroke-width:2px
-    classDef monitoringClass fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-    classDef infraClass fill:#fafafa,stroke:#424242,stroke-width:2px
-    
-    class User userClass
-    class UI frontendClass
-    class NGINX gatewayClass
-    class API,DOC,EMB,RET,LLM backendClass
-    class VS,DOCS,PVC dataClass
-    class OPENAI externalClass
-    class PROM,GRAF,JAEG monitoringClass
-    class SEC infraClass
+         %% Styling for bright background and high contrast
+     classDef userClass fill:#e3f2fd,stroke:#1976d2,stroke-width:2px,color:#000000
+     classDef frontendClass fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,color:#000000
+     classDef gatewayClass fill:#e8f5e8,stroke:#388e3c,stroke-width:2px,color:#000000
+     classDef backendClass fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#000000
+     classDef dataClass fill:#fce4ec,stroke:#c2185b,stroke-width:2px,color:#000000
+     classDef externalClass fill:#e0f7fa,stroke:#00796b,stroke-width:2px,color:#000000
+     classDef monitoringClass fill:#f1f8e9,stroke:#558b2f,stroke-width:2px,color:#000000
+     classDef infraClass fill:#f5f5f5,stroke:#616161,stroke-width:2px,color:#000000
+     
+     class User userClass
+     class UI frontendClass
+     class NGINX gatewayClass
+     class API,DOC,EMB,RET,LLM backendClass
+     class VS,DOCS,PVC dataClass
+     class OPENAI externalClass
+     class PROM,GRAF,JAEG monitoringClass
+     class SEC infraClass
 ```
 
 The diagram above illustrates the complete system architecture showing:
