@@ -82,7 +82,7 @@ settings = get_settings()
 # Setup Jaeger tracing
 service_name = "opt-rag-service"
 logger.info(f"Setting up tracing for service: {service_name}")
-tracer_provider = setup_jaeger_tracing(app, service_name=service_name)
+# tracer_provider = setup_jaeger_tracing(app, service_name=service_name)
 logger.info("Tracing setup complete")
 
 # Add OpenTelemetry instrumentation 
@@ -102,58 +102,35 @@ active_generations = {}
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize resources on application startup
-    
-    UPDATED: Now supports both local model and API-based modes.
-    Set USE_API_LLM=true to use API-based mode.
-    """
+    """Initialize resources on application startup."""
     global assistant 
     logger.info("Initializing OPT-RAG Assistant")
 
     # Initialize metrics with application info
     initialize_metrics(APP_VERSION, APP_MODEL_NAME)
 
-    print("USE_API_LLM: ", os.environ.get("USE_API_LLM", "false").lower() == "true")
-
-    try: 
-        # Check which mode to use
-        use_api_llm = settings.use_api_llm
-        
-        if use_api_llm:
-            logger.info("=== STARTING IN API-BASED LLM MODE ===")
-            # API mode - model_path and device are not used but required for compatibility
-            model_path = os.environ.get("MODEL_PATH", "api-mode")  # Placeholder
-            vector_store_path = os.environ.get("VECTOR_STORE_PATH", settings.vector_store_path)
-            
-            # API configuration
-            api_provider = os.environ.get("LLM_API_PROVIDER", "openai")
-            api_model = os.environ.get("LLM_API_MODEL", "gpt-4o-nano")
-            logger.info(f"Using API provider: {api_provider}, model: {api_model}")
-                    
-        else:
-            logger.info("=== STARTING IN LOCAL MODEL MODE ===")
-        # ===== ORIGINAL LOCAL MODEL CONFIGURATION (PRESERVED) =====
-        model_path = os.environ.get("MODEL_PATH", settings.model_path)
+    try:
+        # Get vector store path
         vector_store_path = os.environ.get("VECTOR_STORE_PATH", settings.vector_store_path)
-        device = os.environ.get("DEVICE", settings.device)
-
-        logger.info(f"Using model at {model_path}")
-        logger.info(f"Using device: {device}")
-        
-        # Common configuration for both modes
         logger.info(f"Using vector store at {vector_store_path}")
         
-        # Initialize assistant (handles both modes internally)
+        # Configure RunPod model parameters
+        model_kwargs = {
+            "max_tokens": 1024,
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+        
+        # Initialize assistant
         assistant = OPTRagAssistant(
-            model_path=model_path, 
-            vector_store_path=vector_store_path, 
-            device=device if not use_api_llm else None  # Device only needed for local mode
+            vector_store_path=vector_store_path,
+            model_kwargs=model_kwargs
         )
         logger.info("OPT-RAG Assistant initialized successfully")
         
     except Exception as e:
         logger.error(f"Failed to initialize OPT-RAG assistant: {e}")
-        # In production, you might want to exit here or provide a fallback
+        raise
 
 # Add routes to both the main app and the API router
 # This maintains backward compatibility while also supporting /api/* routes
@@ -181,11 +158,11 @@ async def query_post(request: QueryRequest):
     tracer = get_tracer()
     with tracer.start_as_current_span("query_post_operation"):
         logger.info(f"Received query: {request.question}")
-        result = assistant.answer_question(request.question)
+        result = await assistant.answer_question(request.question)
 
         return {
             "answer": result["answer"], 
-            "processing_time": result["processing_time"]
+            "processing_time": result["metadata"]["response_time"]
         }
 
 @app.get("/query", response_model=Dict[str, Any])
@@ -199,7 +176,7 @@ async def query_get(q: str = Query(..., description="Query text")):
     tracer = get_tracer()
     with tracer.start_as_current_span("query_get_operation"):
         logger.info(f"Received query: {q}")
-        return assistant.answer_question(q)
+        return await assistant.answer_question(q)
 
 # Create a model for the cancellation request
 class CancelRequest(BaseModel):
@@ -257,87 +234,44 @@ async def stream_query_post(request: QueryRequest):
         async def generate():
             token_count = 0
             full_response = ""
-            skip_prefixes = ["A:", "A: ", "Assistant:", "Assistant: ", "AI:", "AI: ", "Human:", "Human: "]
-            seen_prefixes = set()  # Track prefixes we've seen to avoid logging duplicates
-            processed_full_response = False
             
             try:
                 # Send request ID first
-                request_id_json = json.dumps({"request_id": request_id})
-                yield f"data: {request_id_json}\n\n"
+                yield f"data: {json.dumps({'request_id': request_id})}\n\n"
                 
-                logger.info("Starting SSE stream generation")
                 # Pass the question and cancel event to the assistant
                 stream_iter = assistant.astream_response(request.question, cancel_event=cancel_event)
-                logger.info("Got stream iterator, starting to yield tokens")
                 
-                # Keep track of time to ensure heartbeat
-                last_token_time = time.time()
-                
-                async for token in stream_iter:
-                    # Heartbeat every 10 seconds to keep connection alive
-                    current_time = time.time()
-                    if current_time - last_token_time > 10:
-                        logger.info("Sending heartbeat comment to keep connection alive")
-                        yield ": heartbeat\n\n"
-                    
-                    last_token_time = current_time
-                    
-                    # Check if cancellation was requested
-                    if cancel_event.is_set():
-                        logger.info(f"Generation {request_id} was cancelled")
-                        yield f"data: {json.dumps({'status': 'cancelled'})}\n\n"
-                        yield "data: [DONE]\n\n"
-                        break
-                
-                    token_count += 1
-                    
-                    # Debug log every token
-                    if token_count % 20 == 0:
-                        logger.info(f"Generated {token_count} tokens so far")
-                    
-                    # Skip any tokens that are just the prefixes we want to avoid
-                    if token in skip_prefixes:
-                        if token not in seen_prefixes:
-                            logger.info(f"Skipping standalone prefix token: {token!r}")
-                            seen_prefixes.add(token)
-                        continue
-                    
-                    # Add token to full response for tracking
-                    full_response += token
-                    
-                    # Skip if the full response is just whitespace so far
-                    if full_response.strip() == "":
-                        continue
-                    
-                    # Handle prefixes - check only at the beginning
-                    if not processed_full_response:
-                        for prefix in skip_prefixes:
-                            if full_response.startswith(prefix):
-                                full_response = full_response[len(prefix):].lstrip()
-                                logger.info(f"Removed prefix {prefix!r} from start of response")
-                                processed_full_response = True
-                                break
-                    
-                    # Print each token to stdout for debugging
-                    print(token, end="", flush=True)
-                    
-                    # Properly format for SSE, escape any JSON-incompatible characters
+                while True:
                     try:
-                        escaped_token = json.dumps(token)
-                        yield f"data: {escaped_token}\n\n"
-                    except Exception as e:
-                        logger.error(f"Error escaping token: {e}, token: {token!r}")
-                        # Try to send it anyway as string
-                        yield f"data: \"{token}\"\n\n"
+                        # Wait for the next token with a 10-second timeout
+                        token = await asyncio.wait_for(anext(stream_iter), 10)
+                        
+                        if cancel_event.is_set():
+                            logger.info(f"Generation {request_id} was cancelled by client request")
+                            yield f"data: {json.dumps({'status': 'cancelled'})}\n\n"
+                            break
+
+                        token_count += 1
+                        full_response += token
+                        response_data = {"token": token, "full_response": full_response}
+                        yield f"data: {json.dumps(response_data)}\n\n"
+
+                    except asyncio.TimeoutError:
+                        logger.debug("Sending heartbeat to keep connection alive")
+                        yield ": heartbeat\n\n"
+                    except StopAsyncIteration:
+                        break # The stream is finished
                 
-                logger.info(f"Stream complete. Sent {token_count} tokens.")
-                # Signal completion with proper SSE format
+                if not cancel_event.is_set():
+                    logger.info(f"Stream complete for request {request_id}. Sent {token_count} tokens.")
+                
                 yield "data: [DONE]\n\n"
+
             except Exception as e:
-                logger.error(f"Error in SSE generation: {str(e)}", exc_info=True)
-                error_json = json.dumps({"error": str(e)})
-                yield f"data: {error_json}\n\n"
+                logger.error(f"Error in SSE generation for request {request_id}: {e}", exc_info=True)
+                error_data = {"error": f"An unexpected error occurred: {e}"}
+                yield f"data: {json.dumps(error_data)}\n\n"
                 yield "data: [DONE]\n\n"
             finally:
                 # Clean up the active generation

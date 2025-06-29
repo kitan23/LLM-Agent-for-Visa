@@ -20,7 +20,6 @@ async def test_document_processing(document_path, vector_store_path="vector_stor
     result = await process_documents(
         source_path=document_path,
         vector_store_path=vector_store_path,
-        device="cpu",  # Use CPU to reduce resource usage
         chunk_size=1000,
         chunk_overlap=200
     )

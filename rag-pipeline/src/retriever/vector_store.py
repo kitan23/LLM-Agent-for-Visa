@@ -96,12 +96,11 @@ def create_or_load_vector_store(
     return vector_store
 
 
-def load_vector_store(vector_store_path: str, device: str, force_reload: bool = False):
+def load_vector_store(vector_store_path: str, force_reload: bool = False):
     """Load the FAISS vector store.
     
     Args:
         vector_store_path: Path to the vector store
-        device: Device to use for embeddings
         force_reload: If True, ignore cache and force reload
         
     Returns:
@@ -117,7 +116,6 @@ def load_vector_store(vector_store_path: str, device: str, force_reload: bool = 
         # Initialize embedding model for consistency with vector store
         embeddings = HuggingFaceEmbeddings(
             model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': device}
         )
         
         # Load vector store
@@ -138,7 +136,6 @@ def load_vector_store(vector_store_path: str, device: str, force_reload: bool = 
 def build_vector_store(
     chunks: List[str],
     vector_store_path: str,
-    device: str,
     force_rebuild: bool = False
 ) -> FAISS:
     """Build or load a vector store from document chunks.
@@ -146,7 +143,6 @@ def build_vector_store(
     Args:
         chunks: List of text chunks to embed
         vector_store_path: Path to save/load the vector store
-        device: Device to use for embeddings
         force_rebuild: If True, rebuild the vector store regardless of cache
         
     Returns:
@@ -155,7 +151,6 @@ def build_vector_store(
     # Initialize embeddings model
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={'device': device}
     )
 
     if not chunks:

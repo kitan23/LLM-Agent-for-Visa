@@ -18,60 +18,55 @@ logger = logging.getLogger("opt_rag.config")
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # Model settings
-    model_path: str = "./models/qwen2.5-1.5b"
+    # Vector store settings
     vector_store_path: str = "./vector_store"
-    device: Optional[str] = None  # Auto-detect if None
     
-    # API-based LLM settings
-    use_api_llm: bool = True
-    llm_api_provider: str = "openai"
-    llm_api_key: Optional[str] = None
-    llm_api_model: str = "gpt-4o-mini"
-    llm_api_base_url: Optional[str] = None
+    # RunPod settings
+    runpod_api_key: Optional[str] = None
+    runpod_endpoint_id: Optional[str] = None
+    runpod_model_name: str = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # Default model
     
     # Server settings
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "INFO"
     
-    # Tracing settings
-    otlp_endpoint: str = "http://jaeger:4317"
-    
     # Application settings
     app_name: str = "OPT-RAG International Student Visa Assistant"
     enable_streaming: bool = True
     
-    @field_validator("llm_api_key")
+    # Optional: Tracing settings
+    otlp_endpoint: Optional[str] = None
+    
+    @field_validator("runpod_api_key")
     @classmethod
-    def validate_api_key(cls, v):
-        """Validate API key exists, with fallback to OPENAI_API_KEY."""
+    def validate_runpod_key(cls, v):
+        """Validate RunPod API key exists."""
         if v:
             return v
         
-        # Fallback to standard OpenAI environment variable
-        openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key:
-            logger.info("Using OPENAI_API_KEY as fallback for LLM API key")
-            return openai_key
+        # Try to get from environment
+        runpod_key = os.environ.get("RUNPOD_API_KEY")
+        if not runpod_key:
+            raise ValueError("RunPod API key not found. Set RUNPOD_API_KEY environment variable.")
         
-        # If no key found, return None (will be validated later in assistant)
-        return None
+        logger.info("Using RUNPOD_API_KEY from environment")
+        return runpod_key
     
-    @field_validator("model_path")
+    @field_validator("runpod_endpoint_id")
     @classmethod
-    def validate_model_path(cls, v, values):
-        """Validate model path exists."""
-        # Skip validation if using API mode
-        if values.data.get('use_api_llm', True):
+    def validate_runpod_endpoint(cls, v):
+        """Validate RunPod endpoint ID exists."""
+        if v:
             return v
-            
-        path = Path(v)
-        if not path.exists():
-            # Return the value anyway, but log a warning
-            logger.warning(f"Model path {v} does not exist. It will need to be downloaded.")
-            return v
-        return v
+        
+        # Try to get from environment
+        endpoint_id = os.environ.get("RUNPOD_ENDPOINT_ID")
+        if not endpoint_id:
+            raise ValueError("RunPod endpoint ID not found. Set RUNPOD_ENDPOINT_ID environment variable.")
+        
+        logger.info("Using RUNPOD_ENDPOINT_ID from environment")
+        return endpoint_id
     
     @field_validator("vector_store_path")
     @classmethod
@@ -79,7 +74,6 @@ class Settings(BaseSettings):
         """Validate vector store path exists."""
         path = Path(v)
         if not path.exists():
-            # Return the value anyway, but log a warning
             logger.warning(f"Vector store path {v} does not exist. It will be created if needed.")
             return v
         return v

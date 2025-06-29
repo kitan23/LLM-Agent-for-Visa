@@ -1,0 +1,73 @@
+# pyproject.toml
+# This file defines the project metadata and dependencies for PEP 517-compliant tools.
+# It is the modern standard for configuring Python projects and replaces setup.py and requirements.txt for defining dependencies.
+
+[build-system]
+# Defines the build tools needed to create a package from your project.
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Core project metadata.
+name = "opt-rag"
+version = "0.1.0"
+description = "A Retrieval-Augmented Generation (RAG) application to help international students with visa-related issues."
+readme = "README.md"
+requires-python = ">=3.9" # A reasonable minimum version for these packages.
+license = "MIT" # Updated to the modern string format to resolve the deprecation warning.
+authors = [
+    { name = "Your Name", email = "you@example.com" }, # Update with your details
+]
+
+# A list of all the main dependencies for your project.
+# This section is what `uv pip compile` will read to generate your lock file.
+dependencies = [
+    # Core FastAPI dependencies
+    "fastapi>=0.95.0,<0.116.0",
+    "uvicorn[standard]>=0.22.0,<0.28.0", # [standard] includes performance extras
+    "pydantic>=2.0.0,<3.0.0",
+    "pydantic-settings>=2.0.0,<3.0.0",
+
+    # API-based LLM support
+    "openai>=1.3.0",
+    "httpx>=0.24.0",
+    "httpx-sse>=0.4.0",
+    "runpod==1.5.0",
+    "httpx>=0.25.0",
+
+    # Monitoring and metrics
+    "opentelemetry-api>=1.19.0",
+    "opentelemetry-sdk>=1.19.0",
+    "opentelemetry-exporter-otlp>=1.19.0",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+    "opentelemetry-instrumentation-requests>=0.41b0",
+    "prometheus-client>=0.16.0",
+
+    # Vector store and document processing
+    "faiss-cpu>=1.7.0",
+    "sentence-transformers>=2.2.0",
+    "langchain>=0.0.267",
+    "langchain-community>=0.0.1",
+    "langchain-huggingface>=0.0.1",
+
+    # Utilities
+    "python-multipart>=0.0.6",
+    "python-dotenv>=0.21.0",
+]
+
+[project.urls]
+# Optional: Add links to your project's homepage or repository.
+Homepage = "https://github.com/your-username/OPT-RAG"
+Repository = "https://github.com/your-username/OPT-RAG"
+
+[tool.setuptools.packages.find]
+# This section explicitly tells setuptools where to find your Python package code.
+# It prevents the auto-discovery error by ignoring other top-level directories
+# like 'nginx', 'kubernetes', etc. Setuptools automatically normalizes 'rag-pipeline'
+# to 'rag_pipeline' for the package name.
+include = ["rag_pipeline*"]
+
+[dependency-groups]
+dev = [
+    "pypdf>=5.6.1",
+]

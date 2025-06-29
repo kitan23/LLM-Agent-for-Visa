@@ -1,0 +1,77 @@
+# Global settings
+global:
+  environment: production
+  namespace: opt-rag
+
+# Backend API configuration
+backend:
+  name: backend
+  image:
+    repository: your-registry/opt-rag-backend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  env:
+    RUNPOD_API_KEY: ""
+    OPT_RAG_USE_API_LLM: "true"
+    OPT_RAG_USE_RUNPOD: "true"
+    VECTOR_STORE_PATH: "/app/vector_store"
+
+# Frontend configuration
+frontend:
+  name: frontend
+  image:
+    repository: your-registry/opt-rag-frontend
+    tag: latest
+    pullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# NGINX Gateway configuration
+nginx:
+  name: nginx
+  image:
+    repository: nginx
+    tag: alpine
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+  config:
+    clientMaxBodySize: "10M"
+
+# Service configuration
+service:
+  backend:
+    type: ClusterIP
+    port: 8000
+  frontend:
+    type: ClusterIP
+    port: 8501
+  nginx:
+    type: LoadBalancer
+    port: 80
+
+# Persistent volume for vector store
+persistence:
+  enabled: true
+  storageClass: "standard"
+  size: "10Gi" 

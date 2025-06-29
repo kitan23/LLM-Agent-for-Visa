@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-nginx-config
+  namespace: {{ .Values.global.namespace }}
+data:
+  nginx.conf: |
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      client_max_body_size {{ .Values.nginx.config.clientMaxBodySize }};
+
+      upstream backend {
+        server {{ .Release.Name }}-backend:{{ .Values.service.backend.port }};
+      }
+
+      upstream frontend {
+        server {{ .Release.Name }}-frontend:{{ .Values.service.frontend.port }};
+      }
+
+      server {
+        listen 80;
+        
+        # Frontend
+        location / {
+          proxy_pass http://frontend;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Backend API
+        location /api/ {
+          proxy_pass http://backend/;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          
+          # WebSocket support for streaming
+          proxy_http_version 1.1;
+          proxy_set_header Upgrade $http_upgrade;
+          proxy_set_header Connection "upgrade";
+        }
+      }
+    } 

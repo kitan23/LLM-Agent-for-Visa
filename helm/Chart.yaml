@@ -4,5 +4,6 @@ description: A Helm chart for OPT-RAG application
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
+
 maintainers:
-  - name: OPT-RAG Maintainers 
+  - name: "OPT-RAG Team" 

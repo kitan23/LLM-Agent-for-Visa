@@ -14,19 +14,17 @@ from src.retriever.vector_store import load_vector_store
 from src.utils.logging import setup_logging
 
 
-def test_retrieval(vector_store_path, query, device="cpu", num_results=5):
+def test_retrieval(vector_store_path, query, num_results=5):
     """Test document retrieval from vector store.
     
     Args:
         vector_store_path: Path to the vector store
         query: Query to search for
-        device: Device to use (cpu, cuda, mps)
         num_results: Number of results to retrieve
     """
     print(f"Loading vector store from {vector_store_path}")
     vector_store = load_vector_store(
         vector_store_path=vector_store_path,
-        device=device,
         force_reload=False
     )
     
@@ -77,13 +75,6 @@ def main():
         help="Query to search for"
     )
     parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        choices=["cpu", "cuda", "mps"],
-        help="Device to use"
-    )
-    parser.add_argument(
         "--num-results",
         type=int,
         default=5,
@@ -99,7 +90,6 @@ def main():
     test_retrieval(
         vector_store_path=args.vector_store,
         query=args.query,
-        device=args.device,
         num_results=args.num_results
     )
 
