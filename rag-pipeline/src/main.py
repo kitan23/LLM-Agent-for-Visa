@@ -28,9 +28,7 @@ import asyncio
 
 from src.llm.assistant import OPTRagAssistant
 from src.utils.logging import setup_logging
-from src.utils.metrics import initialize_metrics, APP_INFO
-from src.utils.config import Settings, get_settings
-from src.utils.tracing import setup_jaeger_tracing, get_tracer
+from langfuse import Langfuse
 
 # Set up detailed logging for streaming-related modules
 logging.getLogger("opt_rag.assistant").setLevel(logging.DEBUG)
@@ -77,21 +75,8 @@ api_router.add_middleware(
     allow_headers=["*"],
 )
 
-settings = get_settings()
-
-# Setup Jaeger tracing
-service_name = "opt-rag-service"
-logger.info(f"Setting up tracing for service: {service_name}")
-# tracer_provider = setup_jaeger_tracing(app, service_name=service_name)
-logger.info("Tracing setup complete")
-
-# Add OpenTelemetry instrumentation 
-# Note: We don't need this line as FastAPIInstrumentor is already initialized in setup_jaeger_tracing
-# FastAPIInstrumentor.instrument_app(app)
-
-# Add metrics endpoint using Prometheus ASGI app
-metrics_app = make_asgi_app()
-app.mount("/metrics", metrics_app)
+# Setup Langfuse
+langfuse = Langfuse()
 
 # Initialize the OPT-RAG assistant 
 assistant = None 
@@ -106,12 +91,9 @@ async def startup_event():
     global assistant 
     logger.info("Initializing OPT-RAG Assistant")
 
-    # Initialize metrics with application info
-    initialize_metrics(APP_VERSION, APP_MODEL_NAME)
-
     try:
         # Get vector store path
-        vector_store_path = os.environ.get("VECTOR_STORE_PATH", settings.vector_store_path)
+        vector_store_path = os.environ.get("VECTOR_STORE_PATH", "./vector_store")
         logger.info(f"Using vector store at {vector_store_path}")
         
         # Configure RunPod model parameters
@@ -154,16 +136,29 @@ async def query_post(request: QueryRequest):
     if not assistant: 
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    # Create a span for this operation
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query_post_operation"):
-        logger.info(f"Received query: {request.question}")
-        result = await assistant.answer_question(request.question)
-
-        return {
-            "answer": result["answer"], 
-            "processing_time": result["metadata"]["response_time"]
+    trace = langfuse.trace(
+        name = "rag-pipeline",
+        user_id = "user@example.com", # Replace with actual user id
+        metadata = {
+            "query": request.question
         }
+    )
+
+    generation = trace.generation(
+        name = "answer-generation",
+        model = APP_MODEL_NAME,
+        input = request.question,
+        metadata = {
+            "interface": "api-post"
+        }
+    )
+    
+    result = await assistant.answer_question(request.question, trace=trace, generation=generation)
+
+    return {
+        "answer": result["answer"], 
+        "processing_time": result["metadata"]["response_time"]
+    }
 
 @app.get("/query", response_model=Dict[str, Any])
 @api_router.get("/query", response_model=Dict[str, Any])
@@ -172,11 +167,24 @@ async def query_get(q: str = Query(..., description="Query text")):
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    # Create a span for this operation
-    tracer = get_tracer()
-    with tracer.start_as_current_span("query_get_operation"):
-        logger.info(f"Received query: {q}")
-        return await assistant.answer_question(q)
+    trace = langfuse.trace(
+        name = "rag-pipeline",
+        user_id = "user@example.com", # Replace with actual user id
+        metadata = {
+            "query": q
+        }
+    )
+
+    generation = trace.generation(
+        name = "answer-generation",
+        model = APP_MODEL_NAME,
+        input = q,
+        metadata = {
+            "interface": "api-get"
+        }
+    )
+
+    return await assistant.answer_question(q, trace=trace, generation=generation)
 
 # Create a model for the cancellation request
 class CancelRequest(BaseModel):
@@ -226,70 +234,61 @@ async def stream_query_post(request: QueryRequest):
     cancel_event = Event()
     active_generations[request_id] = cancel_event
     
-    # Create a span for this operation
-    tracer = get_tracer()
-    with tracer.start_as_current_span("stream_query_post_operation"):
-        logger.info(f"Received streaming query: {request.question} (ID: {request_id})")
+    trace = langfuse.trace(
+        name = "rag-pipeline-stream",
+        user_id = "user@example.com", # Replace with actual user id
+        metadata = {
+            "query": request.question
+        }
+    )
 
-        async def generate():
-            token_count = 0
-            full_response = ""
+    generation = trace.generation(
+        name = "answer-generation-stream",
+        model = APP_MODEL_NAME,
+        input = request.question,
+        metadata = {
+            "interface": "api-post-stream"
+        }
+    )
+
+    async def generate():
+        token_count = 0
+        full_response = ""
+        
+        try:
+            # Send request ID first
+            yield f"data: {json.dumps({'request_id': request_id})}\n\n"
             
-            try:
-                # Send request ID first
-                yield f"data: {json.dumps({'request_id': request_id})}\n\n"
+            # Pass the question and cancel event to the assistant
+            stream_iter = assistant.astream_response(request.question, cancel_event=cancel_event, trace=trace, generation=generation)
+            
+            async for token in stream_iter:
+                if cancel_event.is_set():
+                    logger.info(f"Stream {request_id} cancelled by client")
+                    break
                 
-                # Pass the question and cancel event to the assistant
-                stream_iter = assistant.astream_response(request.question, cancel_event=cancel_event)
+                token_count += 1
+                full_response += token
                 
-                while True:
-                    try:
-                        # Wait for the next token with a 10-second timeout
-                        token = await asyncio.wait_for(anext(stream_iter), 10)
-                        
-                        if cancel_event.is_set():
-                            logger.info(f"Generation {request_id} was cancelled by client request")
-                            yield f"data: {json.dumps({'status': 'cancelled'})}\n\n"
-                            break
+                # Format for SSE
+                yield f"data: {json.dumps({'token': token})}\n\n"
 
-                        token_count += 1
-                        full_response += token
-                        response_data = {"token": token, "full_response": full_response}
-                        yield f"data: {json.dumps(response_data)}\n\n"
-
-                    except asyncio.TimeoutError:
-                        logger.debug("Sending heartbeat to keep connection alive")
-                        yield ": heartbeat\n\n"
-                    except StopAsyncIteration:
-                        break # The stream is finished
-                
-                if not cancel_event.is_set():
-                    logger.info(f"Stream complete for request {request_id}. Sent {token_count} tokens.")
-                
-                yield "data: [DONE]\n\n"
-
-            except Exception as e:
-                logger.error(f"Error in SSE generation for request {request_id}: {e}", exc_info=True)
-                error_data = {"error": f"An unexpected error occurred: {e}"}
-                yield f"data: {json.dumps(error_data)}\n\n"
-                yield "data: [DONE]\n\n"
-            finally:
-                # Clean up the active generation
-                if request_id in active_generations:
-                    logger.info(f"Cleaning up resources for generation {request_id}")
-                    del active_generations[request_id]
+            # Signal completion
+            yield "data: [DONE]\n\n"
+            
+        except asyncio.CancelledError:
+            logger.info(f"Stream {request_id} was cancelled.")
+        except Exception as e:
+            logger.error(f"Error in stream {request_id}: {str(e)}", exc_info=True)
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            generation.end(output=full_response)
+            langfuse.flush()
+            # Clean up active generation
+            if request_id in active_generations:
+                del active_generations[request_id]
     
-        logger.info("Returning StreamingResponse")
-        return StreamingResponse(
-            generate(), 
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",  # Prevent proxy buffering
-                "X-Request-ID": request_id  # Include the request ID in response headers
-            }
-        )
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 @app.get("/stream")
 @api_router.get("/stream")
@@ -298,36 +297,62 @@ async def stream_query_get(q: str = Query(..., description="Query text")):
     if not assistant:
         return {"error": "OPT-RAG Assistant not initialized"}
     
-    # Create a span for this operation
-    tracer = get_tracer()
-    with tracer.start_as_current_span("stream_query_get_operation"):
-        logger.info(f"Received streaming query: {q}")
+    trace = langfuse.trace(
+        name = "rag-pipeline-stream",
+        user_id = "user@example.com", # Replace with actual user id
+        metadata = {
+            "query": q
+        }
+    )
+
+    generation = trace.generation(
+        name = "answer-generation-stream",
+        model = APP_MODEL_NAME,
+        input = q,
+        metadata = {
+            "interface": "api-get-stream"
+        }
+    )
         
-        async def generate():
-            token_count = 0
-            logger.info("Starting SSE stream generation for GET request")
-            try:
-                async for token in assistant.astream_response(q):
-                    token_count += 1
-                    if token_count % 10 == 0:
-                        logger.info(f"Streaming GET: sent {token_count} SSE events")
-                    # Properly format for SSE, escape any newlines in the token
-                    escaped_token = json.dumps(token)
-                    yield f"data: {escaped_token}\n\n"
-                logger.info(f"GET stream complete. Sent {token_count} tokens.")
-                # Signal completion
-                yield "data: [DONE]\n\n"
-            except Exception as e:
-                logger.error(f"Error in GET SSE generation: {str(e)}")
-                error_json = json.dumps({"error": str(e)})
-                yield f"data: {error_json}\n\n"
-                yield "data: [DONE]\n\n"
-        
-        logger.info("Returning GET StreamingResponse")
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream"
-        )
+    async def generate():
+        token_count = 0
+        full_response = ""
+        logger.info("Starting SSE stream generation for GET request")
+        try:
+            async for token in assistant.astream_response(q, trace=trace, generation=generation):
+                token_count += 1
+                full_response += token
+                if token_count % 10 == 0:
+                    logger.info(f"Streaming GET: sent {token_count} SSE events")
+                # Properly format for SSE, escape any newlines in the token
+                escaped_token = json.dumps(token)
+                yield f"data: {escaped_token}\n\n"
+            logger.info(f"GET stream complete. Sent {token_count} tokens.")
+            # Signal completion
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Error in GET SSE generation: {str(e)}")
+            error_json = json.dumps({"error": str(e)})
+            yield f"data: {error_json}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            generation.end(output=full_response)
+            langfuse.flush()
+    
+    logger.info("Returning GET StreamingResponse")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream"
+    )
+
+@app.post("/cancel/{request_id}")
+async def cancel_stream(request_id: str):
+    """Cancel a running streaming request."""
+    if request_id in active_generations:
+        active_generations[request_id].set()
+        logger.info(f"Cancellation requested for stream {request_id}")
+        return {"status": "cancellation_requested"}
+    return {"status": "not_found"}
 
 @app.post("/documents", response_model=Dict[str, Any])
 @api_router.post("/documents", response_model=Dict[str, Any])
@@ -392,10 +417,12 @@ async def list_documents():
 @api_router.get("/metrics/summary", response_model=Dict[str, Any])
 async def metrics_summary():
     """Get a summary of metrics."""
+    # This is now a legacy endpoint. Metrics are pushed to Langfuse.
     return {
-        "query_count": "Available at /metrics",
-        "query_latency": "Available at /metrics",
-        "vector_count": "Available at /metrics",
+        "status": "Metrics are now reported to Langfuse.",
+        "query_count": "N/A",
+        "query_latency": "N/A",
+        "vector_count": "N/A",
     }
 
 @app.get("/health")

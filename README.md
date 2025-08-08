@@ -1,15 +1,31 @@
 # OPT-RAG: International Student Visa Assistant
 
-OPT-RAG is a Retrieval-Augmented Generation (RAG) application designed to help international students navigate visa-related issues, OPT applications, and other immigration concerns.
+OPT-RAG is a Retrieval-Augmented Generation (RAG) system designed to help international students navigate visa-related issues, OPT applications, study/work authorization questions, and other immigration concerns. The system provides accurate, context-aware responses from official documentation.
 
-## Project Overview
+## 🎯 Target Users
 
-The OPT-RAG application uses retrieval-augmented generation to provide accurate information by retrieving relevant content from official documentation and policies. The application consists of:
+- International students in the United States
+- University international student advisors
+- Immigration support staff
+- Prospective international students
 
-- **Backend (FastAPI)**: Processes documents, maintains vector store, and handles queries
-- **Frontend (Streamlit)**: Provides user interface for interacting with the assistant
+## 🚀 Core Features
 
-## System Architecture
+### Document Processing & RAG Pipeline
+- **Automated PDF Processing**: Intelligent document ingestion with chunking (1000 tokens, 200 overlap)
+- **Semantic Search**: Vector similarity search for finding relevant information
+- **Context-Aware Generation**: RAG pipeline that provides responses with source attribution
+- **Streaming Responses**: Real-time response generation with Server-Sent Events (SSE)
+- **Session Management**: Maintains conversation context throughout the session
+
+### Multi-Modal Capabilities
+- **PDF Text Extraction**: Preserves document layout while extracting content
+- **Intelligent Chunking**: Content-aware segmentation for better context retention
+- **Source Citation**: Automatic linking to source documents for verification
+- **Query Control**: User-controllable request termination
+- **Content Caching**: Hash-based vector store caching for improved efficiency
+
+## 🏗️ System Architecture
 
 ```mermaid
 graph TB
@@ -18,30 +34,32 @@ graph TB
     
     %% Frontend Layer
     subgraph "Frontend Layer"
-        UI[🖥️ Streamlit UI<br/>Port: 8501]
+        UI[🖥️ Streamlit UI<br/>Port: 8501<br/>Interactive Chat Interface]
     end
     
     %% Backend Services Layer
     subgraph "Backend Services"
-        API[🚀 FastAPI Backend<br/>Port: 8000]
+        API[🚀 FastAPI Backend<br/>Port: 8000<br/>RESTful API with Streaming]
         
-        subgraph "RAG Pipeline Components"
-            DOC[📄 Document Processor<br/>PDF & Text Processing]
-            EMB[🧠 Embeddings Generator<br/>Vector Creation]
-            RET[🔍 Retriever<br/>Context Search]
-            LLM[🤖 LLM Assistant<br/>Response Generation]
+        subgraph "RAG Pipeline"
+            DOC[📄 Document Processor<br/>PyPDF/PyMuPDF]
+            EMB[🧠 Embeddings<br/>all-MiniLM-L6-v2<br/>384-dim vectors]
+            RET[🔍 Retriever<br/>Semantic Search]
+            LLM[🤖 LLM Assistant<br/>Qwen2.5/GPT-4o-mini]
         end
     end
     
     %% Data Storage Layer
     subgraph "Data Layer"
-        VS[💾 Vector Store<br/>FAISS Database]
-        DOCS[📚 Document Storage<br/>PDF Files & Examples]
+        VS[💾 Vector Store<br/>Milvus/FAISS]
+        DOCS[📚 Document Storage<br/>Official Immigration Docs]
+        CACHE[⚡ Redis Cache<br/>Query Optimization]
     end
     
     %% External Services
-    subgraph "External APIs"
-        OPENAI[🌟 OpenAI API<br/>GPT-4o-mini]
+    subgraph "LLM Infrastructure"
+        RUNPOD[🖥️ RunPod GPU<br/>Qwen2.5-1.5B]
+        OPENAI[🌟 OpenAI API<br/>GPT-4o-mini Fallback]
     end
     
     %% User Flow
@@ -55,125 +73,225 @@ graph TB
     API --> RET
     RET --> VS
     RET --> LLM
-    LLM --> OPENAI
+    LLM --> RUNPOD
+    LLM -.->|Fallback| OPENAI
     
-    %% Data Persistence
-    DOC --> DOCS
-    EMB --> VS
-    VS --> VS
+    %% Cache Integration
+    API --> CACHE
+    CACHE --> VS
     
-    %% Document Upload Flow
+    %% Document Flow
     User -.->|"📤 Upload PDFs"| UI
     UI -.->|"Process Documents"| DOC
     DOC -.->|"Generate Embeddings"| EMB
     
     %% Query Flow
     User -.->|"❓ Ask Question"| UI
-    RET -.->|"🔍 Find Relevant Context"| VS
+    RET -.->|"🔍 Find Context"| VS
     LLM -.->|"📝 Generate Response"| User
 ```
 
-## Getting Started
+## 📚 Data Sources
+
+- **Official Documentation**: USCIS, Department of State, SEVP resources
+- **University Policies**: Institution-specific international student guidelines
+- **Legal Documents**: I-20, DS-2019, visa application examples
+- **Regulatory Updates**: Current OPT/CPT guidelines and policy changes
+
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
-- OpenAI API key (get one from [OpenAI Platform](https://platform.openai.com/api-keys))
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- Python 3.10+
+- 8GB RAM minimum
+- API Key (OpenAI or RunPod) for LLM inference
 
-### Quick Start (API Mode)
+### Quick Start
 
 1. **Clone the Repository**
 ```bash
-git clone <repository-url>
+git clone https://github.com/kitan23/LLM-Agent-for-Visa.git
 cd OPT-RAG
 ```
 
 2. **Set Up Environment Variables**
 ```bash
-# Create .env file with your OpenAI API key
-echo "OPENAI_API_KEY=your_openai_api_key_here" > .env
+# Create .env file with your configuration
+cat > .env << EOF
+# LLM Configuration (choose one)
+OPENAI_API_KEY=your_openai_api_key_here  # For OpenAI
+# OR
+RUNPOD_API_KEY=your_runpod_api_key_here  # For RunPod
+
+# Optional: Use local model instead
+OPT_RAG_USE_API_LLM=false  # Set to false for local model
+EOF
 ```
 
 3. **Start the Application**
 ```bash
-# Start all services
+# Start all services with Docker Compose
 docker-compose up -d
 
-# Check if services are running
+# Check service status
 docker-compose ps
+
+# View logs
+docker-compose logs -f
 ```
 
 4. **Access the Application**
-- Frontend UI: http://localhost:8501
-- Backend API: http://localhost:8000/docs
+- **Chat Interface**: http://localhost:8501
+- **API Documentation**: http://localhost:8000/docs
+- **Health Check**: http://localhost:8000/health
 
-### Alternative: Local Model Setup
+### Local Development Setup
 
-If you prefer to run without the OpenAI API, you can use a local model:
+For development without Docker:
 
-1. **Download the Model**
 ```bash
-# Create models directory
-mkdir -p rag-pipeline/models
+# Install dependencies
+pip install -r requirements.txt
 
-# Download using Python
-pip install huggingface-hub
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Qwen/Qwen2.5-1.5B', local_dir='./rag-pipeline/models/qwen2.5-1.5b')"
+# Start backend
+cd rag-pipeline
+uvicorn src.main:app --reload --port 8000
+
+# In another terminal, start frontend
+cd streamlit
+streamlit run app.py --server.port 8501
 ```
 
-2. **Configure for Local Model**
-```bash
-# Set environment variable
-echo "OPT_RAG_USE_API_LLM=false" >> .env
+## 💡 Usage Guide
 
-# Start the services
-docker-compose up -d
-```
+### Uploading Documents
 
-## Features
-
-- Upload and process official immigration documents
-- Ask questions in natural language about visa and immigration topics
-- Get context-aware responses based on official documentation
-- Reference sources used to generate answers
-- Maintain conversation context
-
-## Usage
-
-### Document Upload
-1. Go to http://localhost:8501
+1. Navigate to http://localhost:8501
 2. Use the sidebar to upload PDF documents
-3. Documents will be processed and added to the vector store
-4. You can then ask questions about the uploaded content
+3. Wait for processing confirmation
+4. Documents are automatically chunked and indexed
 
 ### Asking Questions
-Simply type your question in the chat interface and wait for the response. The system will:
-1. Search through the uploaded documents
-2. Find relevant information
-3. Generate a comprehensive answer
-4. Provide references to source documents
 
-## Project Structure
+Simply type your visa-related questions in the chat interface:
+
+**Example Questions:**
+- "What are the requirements for OPT application?"
+- "How long can I stay in the US after my F-1 visa expires?"
+- "Can I work on CPT while maintaining full-time student status?"
+- "What documents do I need for visa renewal?"
+
+The system will:
+1. Search through uploaded documents for relevant context
+2. Retrieve the most pertinent information
+3. Generate a comprehensive, accurate response
+4. Provide citations to source documents
+
+### Response Features
+
+- **Source Attribution**: Each response includes references to source documents
+- **Context Preservation**: Maintains conversation history for follow-up questions
+- **Real-time Streaming**: See responses as they're generated
+- **Query Cancellation**: Stop long-running queries if needed
+
+## 📁 Project Structure
 
 ```
 OPT-RAG/
-├── rag-pipeline/           # Backend service
-│   ├── src/               # Core RAG implementation
-│   │   ├── document_processor/  # Document handling
-│   │   ├── llm/          # LLM integration
-│   │   ├── retriever/    # Vector store
-│   │   └── utils/        # Utilities
-│   ├── examples/         # Sample documents
-│   └── tests/            # Test suite
-└── streamlit/            # Frontend UI
-    └── app.py           # Streamlit application
+├── rag-pipeline/              # Backend RAG service
+│   ├── src/
+│   │   ├── document_processor/  # PDF processing & chunking
+│   │   ├── llm/                # LLM integration & assistants
+│   │   ├── retriever/          # Vector store & search
+│   │   ├── embeddings/         # Embedding generation
+│   │   └── main.py            # FastAPI application
+│   ├── data/
+│   │   ├── raw/               # Original PDF documents
+│   │   └── processed/         # Processed chunks & embeddings
+│   └── Dockerfile
+├── streamlit/                 # Frontend UI
+│   ├── app.py                # Streamlit chat interface
+│   └── Dockerfile
+├── docker-compose.yml        # Service orchestration
+├── .env.example             # Environment variables template
+└── README.md               # This file
 ```
 
-## License
+## 📊 Performance Metrics
+
+### Target Performance
+- **Query Response Time**: < 3 seconds (95th percentile)
+- **Vector Retrieval Latency**: < 500ms
+- **LLM Inference Time**: < 2 seconds
+- **Document Processing**: > 100 pages/hour
+- **System Uptime**: > 99.5%
+
+### Current Status
+- ✅ Core RAG pipeline implemented
+- ✅ Document processing and chunking operational
+- ✅ Vector store with semantic search working
+- ✅ Streaming responses enabled
+- ✅ Session-based conversation context
+
+## 🛠️ Configuration
+
+### Vector Store Settings
+```python
+# Milvus configuration
+VECTOR_DIMENSION = 384
+INDEX_TYPE = "IVF_FLAT"
+METRIC_TYPE = "L2"
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
+```
+
+### LLM Options
+- **Primary**: Qwen2.5-1.5B (via RunPod)
+- **Fallback**: OpenAI GPT-4o-mini
+- **Local**: Qwen2.5-0.5B or Qwen2.5-1.5B
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+1. **Services not starting**
+   - Check Docker/Docker Compose installation
+   - Verify port availability (8000, 8501)
+   - Review logs: `docker-compose logs`
+
+2. **LLM not responding**
+   - Verify API key in `.env` file
+   - Check network connectivity
+   - Confirm RunPod/OpenAI service status
+
+3. **Document processing fails**
+   - Ensure PDF is not corrupted
+   - Check file size (< 10MB recommended)
+   - Verify sufficient memory available
+
+### Getting Help
+
+- Check logs: `docker-compose logs [service-name]`
+- API health: http://localhost:8000/health
+- Submit issues: [GitHub Issues](https://github.com/kitan23/LLM-Agent-for-Visa/issues)
+
+## 📝 License
 
 [MIT License](LICENSE)
 
-## Disclaimer
+## ⚠️ Disclaimer
 
-This assistant provides information based on available documents. It is not a substitute for legal advice. 
+This assistant provides information based on available documentation and is designed to help navigate visa-related questions. However, it is **not a substitute for legal advice**. Always consult with qualified immigration attorneys or official government sources for critical decisions.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please read our contributing guidelines and submit pull requests to our repository.
+
+## 📧 Contact
+
+For questions or support, please open an issue on GitHub or contact the maintainers.
+
+---
+
+Built with ❤️ for the international student community

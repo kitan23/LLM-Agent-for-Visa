@@ -1,125 +1,208 @@
 # OPT-RAG: International Student Visa Assistant PRD
 
 ## Project Overview
-OPT-RAG is a Retrieval-Augmented Generation (RAG) LLM agent pipeline designed to help international students navigate visa-related issues, OPT applications, study/work authorization questions, and other related concerns. The system will provide accurate, context-aware responses by leveraging relevant documentation and resources.
+OPT-RAG is an enterprise-grade Retrieval-Augmented Generation (RAG) system designed to help international students navigate visa-related issues, OPT applications, study/work authorization questions, and other immigration concerns. The system leverages modern MLOps practices, distributed data processing, and advanced observability to provide accurate, context-aware responses from official documentation.
 
 ## Target Users
-- International students in the United States
-- University advisors and administrators
-- Immigration support staff
-- Prospective international students
+- **Primary**: International students in the United States
+- **Secondary**: University international student advisors and administrators
+- **Tertiary**: Immigration support staff and prospective international students
 
 ## Problem Statement
-International students face complex visa regulations, application processes, and work authorization requirements that can be difficult to navigate. Accurate information is critical but often scattered across multiple sources, difficult to interpret, or not easily accessible when needed most.
+International students face complex visa regulations, application processes, and work authorization requirements that can be difficult to navigate. Accurate information is critical but often scattered across multiple sources, difficult to interpret, or not easily accessible when needed most. Traditional search methods fail to provide contextual, personalized guidance for specific visa situations.
 
 ## Project Goals
-1. Create a reliable, accessible AI assistant for international student visa queries
-2. Provide accurate information on OPT, CPT, visa status, work authorization, and related topics
-3. Reduce time spent searching for information across multiple sources
-4. Help prevent visa status issues through proactive information delivery
-5. Create a platform that can be expanded to cover additional international student concerns
-
-## Key Features
-
-### Core Functionality
-- **Document Ingestion**: Upload and process official immigration documents, university policies, and government resources
-- **Natural Language Query Interface**: Allow users to ask questions in plain language
-- **Context-Aware Responses**: Provide answers specifically relevant to the user's situation
-- **Source Citation**: Reference the specific documents or policies used to generate each answer
-- **Conversation History**: Maintain context throughout a conversation session
-
-### Technical Requirements
-- **RAG Pipeline**: Implement retrieval-augmented generation to pull relevant context from documents
-- **Local LLM Integration**: Support for running with local LLMs for privacy and control
-- **Vector Database**: Store and efficiently retrieve document embeddings
-- **API Gateway**: Manage request routing and load balancing
-- **User Interface**: Clean, accessible frontend for interactions
-- **Monitoring & Logging**: Track system performance and user interactions
-- **Containerization**: Package components for easy deployment
-
-### Non-Functional Requirements
-- **Accuracy**: Responses must be highly accurate given the critical nature of visa information
-- **Response Time**: Fast enough for interactive use (target <5 seconds)
-- **Scalability**: Support for multiple concurrent users
-- **Privacy**: Secure handling of potentially sensitive user information
-- **Availability**: High uptime for dependable service
-- **Compliance**: Adhere to data protection regulations
+1. **Reliable AI Assistant**: Create a production-ready AI system for international student visa queries
+2. **Comprehensive Coverage**: Provide accurate information on OPT, CPT, F-1/J-1 visa status, work authorization, and related topics
+3. **Operational Efficiency**: Reduce information search time and improve accuracy through intelligent document retrieval
+4. **Proactive Support**: Help prevent visa status issues through timely, accurate information delivery
+5. **Scalable Platform**: Build infrastructure that can expand to cover additional international student services
 
 ## System Architecture
-The system will follow a microservices architecture with the following components:
 
-1. **Frontend Service**: Streamlit-based user interface
-2. **Backend API**: FastAPI-based service handling requests and LLM orchestration
-3. **Document Processing Pipeline**: Ingestion, chunking, embedding generation
-4. **Vector Database**: Storage for document embeddings (FAISS)
-5. **LLM Service**: Interface to local or hosted language models
-6. **Monitoring Stack**: Prometheus, Grafana, and Jaeger for observability
-7. **API Gateway**: NGINX for routing and load balancing
-8. **CI/CD Pipeline**: Automated testing and deployment
+### Core Technology Stack
+
+**Frontend & Backend:**
+- **Frontend**: Streamlit UI (Port 8501) - Interactive chat interface
+- **Backend**: FastAPI service (Port 8000) - RESTful API with streaming support
+- **Language**: Python 3.10 with modern async/await patterns
+
+**LLM Infrastructure:**
+- **Primary**: RunPod serverless GPU hosting for Qwen2.5-1.5B model
+- **Fallback**: OpenAI GPT-4o-mini API
+- **Local Models**: Qwen2.5-0.5B and Qwen2.5-1.5B for development/offline use
+
+**Data Pipeline & Processing:**
+- **Orchestration**: Apache Airflow with CeleryExecutor
+- **Vector Database**: Milvus (v2.3.1) with IVF_FLAT indexing
+- **Feature Store**: Feast with PostgreSQL registry and Milvus online store
+- **Document Processing**: PyPDF/PyMuPDF with RecursiveCharacterTextSplitter
+- **Embeddings**: sentence-transformers/all-MiniLM-L6-v2 (384-dim)
+
+**Infrastructure & Storage:**
+- **Containerization**: Docker + Docker Compose for local development
+- **Cloud Deployment**: Google Kubernetes Engine (GKE) with Helm charts
+- **Object Storage**: MinIO for intermediate data and backups
+- **Databases**: PostgreSQL (metadata), Redis (caching), ClickHouse (analytics)
+- **Coordination**: etcd for distributed services
+
+**Observability & Monitoring:**
+- **Primary**: Langfuse for LLM tracing, metrics, and observability
+- **Logging**: OpenTelemetry with structured logging
+- **Analytics**: ClickHouse for query analytics and performance metrics
+
+### Key Features
+
+**Core RAG Functionality:**
+- **Document Ingestion**: Automated PDF processing and chunking (1000 tokens, 200 overlap)
+- **Semantic Search**: Vector similarity search with FAISS/Milvus
+- **Context-Aware Generation**: RAG pipeline with source attribution
+- **Streaming Responses**: Real-time response generation with SSE
+- **Conversation Context**: Session-based conversation memory
+
+**Advanced Features:**
+- **Multi-Modal Processing**: PDF text extraction with layout preservation
+- **Intelligent Chunking**: Content-aware document segmentation
+- **Source Citation**: Automatic reference linking to source documents
+- **Query Cancellation**: User-controllable request termination
+- **Content Caching**: Hash-based vector store caching for efficiency
+
+**Enterprise Features:**
+- **Distributed Processing**: Airflow DAGs for scalable document processing
+- **Feature Store**: Feast integration for ML feature management
+- **Monitoring**: End-to-end pipeline observability with Langfuse
+- **API Gateway**: NGINX load balancing and routing
+- **Health Checks**: Comprehensive service health monitoring
 
 ## Data Sources
-- USCIS official documentation
-- Department of State visa information
-- University-specific international student policies
-- I-20, DS-2019, and other visa document examples
-- OPT/CPT guidelines and application instructions
-- Student and Exchange Visitor Program (SEVP) resources
+- **Official Documentation**: USCIS, Department of State, SEVP resources
+- **University Policies**: Institution-specific international student guidelines
+- **Legal Documents**: I-20, DS-2019, visa application examples
+- **Regulatory Updates**: Current OPT/CPT guidelines and policy changes
+- **Case Studies**: Anonymized examples of common visa scenarios
 
 ## Deployment Strategy
-1. **Local Development**: Docker Compose for local testing
-2. **Containerization**: Docker images for all components
-3. **Orchestration**: Kubernetes for deployment and scaling
-4. **Cloud Deployment**: Support for deployment on cloud platforms
+
+### Current Implementation
+1. **Local Development**: Docker Compose orchestration with full stack
+2. **Cloud Production**: GKE deployment with Helm charts
+3. **CI/CD Pipeline**: Automated testing and deployment workflows
+4. **Monitoring**: Langfuse integration for production observability
+
+### Infrastructure Components
+- **Compute**: RunPod GPU instances for LLM inference
+- **Storage**: GKE persistent volumes with MinIO object storage
+- **Networking**: NGINX ingress controller with SSL termination
+- **Security**: Kubernetes secrets management and RBAC
 
 ## Success Metrics
-- User satisfaction ratings
-- Query resolution rate
-- Response accuracy (validated against official sources)
-- System performance metrics (response time, uptime)
-- User retention and engagement
 
-## Project Phases
+**User Experience:**
+- Query response time < 3 seconds (95th percentile)
+- User satisfaction rating > 4.5/5.0
+- Query resolution rate > 90%
+- Session completion rate > 80%
 
-### Phase 1: MVP Development
-- Basic RAG pipeline implementation
-- Document ingestion for core visa documents
-- Simple query interface
-- Local deployment capability
+**Technical Performance:**
+- System uptime > 99.5%
+- Vector retrieval latency < 500ms
+- LLM inference time < 2 seconds
+- Document processing throughput > 100 pages/hour
 
-### Phase 2: Enhanced Features
-- Improved context handling
-- More comprehensive document corpus
-- Personalization based on user profile
-- Enhanced UI with additional features
+**Business Impact:**
+- Monthly active users growth
+- Average session duration and query depth
+- Document corpus coverage and freshness
+- Cost per query optimization
 
-### Phase 3: Production Deployment
-- Full monitoring and observability
-- CI/CD pipeline integration
-- Cloud deployment
-- Performance optimization
+## Technical Implementation Phases
+
+### Phase 1: Infrastructure Consolidation ✅
+- ✅ Migrated monitoring from Prometheus/Grafana/Jaeger to Langfuse
+- ✅ Integrated RunPod for scalable LLM inference
+- ✅ Implemented Airflow data pipeline with Milvus/Feast
+- ✅ Established Docker Compose development environment
+
+### Phase 2: Production Readiness (Current)
+- **Kubernetes Migration**: Clean rebuild of K8s deployment
+- **Pipeline Optimization**: Airflow DAG performance tuning
+- **Monitoring Enhancement**: Complete Langfuse integration
+- **Security Hardening**: Secrets management and access controls
+
+### Phase 3: Advanced Features
+- **Multi-User Support**: Session management and user profiles
+- **Advanced RAG**: Hybrid search with keyword + semantic
+- **Document Versioning**: Automated corpus updates
+- **Performance Optimization**: Caching and query optimization
+
+## Next Steps - Immediate Actions Required
+
+### 1. Kubernetes Infrastructure Rebuild
+**Priority**: High
+- **Action**: Complete redesign of Kubernetes deployment
+- **Components**: Clean Helm charts, proper resource allocation, service mesh
+- **Timeline**: 2-3 weeks
+
+### 2. Airflow Pipeline Optimization
+**Priority**: High
+- **Action**: Optimize data ingestion and embedding pipeline
+- **Focus**: Parallel processing, error handling, monitoring
+- **Timeline**: 1-2 weeks
+
+### 3. Langfuse Integration Completion
+**Priority**: Medium
+- **Action**: Full migration from legacy monitoring stack
+- **Components**: Tracing, metrics collection, dashboard configuration
+- **Timeline**: 1 week
+
+### 4. RunPod Integration Testing
+**Priority**: Medium
+- **Action**: Comprehensive testing of RunPod inference pipeline
+- **Focus**: Performance, reliability, cost optimization
+- **Timeline**: 1 week
+
+### 5. Feature Store Enhancement
+**Priority**: Medium
+- **Action**: Optimize Feast configuration for production workloads
+- **Focus**: Feature serving performance, data freshness
+- **Timeline**: 1-2 weeks
+
+### 6. Documentation and Testing
+**Priority**: Medium
+- **Action**: Comprehensive documentation and test coverage
+- **Components**: API docs, deployment guides, integration tests
+- **Timeline**: 1-2 weeks
+
+## Risk Management
+
+**Technical Risks:**
+- **RunPod Dependency**: Implement OpenAI fallback and local model support
+- **Vector Store Performance**: Monitor Milvus scaling and optimize queries
+- **Data Pipeline Failures**: Robust error handling and retry mechanisms
+
+**Operational Risks:**
+- **Cost Management**: Monitor RunPod GPU usage and optimize batch processing
+- **Security**: Implement proper authentication and data protection
+- **Compliance**: Ensure FERPA compliance for student data handling
+
+**Mitigation Strategies:**
+- Comprehensive monitoring with Langfuse
+- Automated testing and deployment pipelines
+- Clear documentation and incident response procedures
+- Regular security audits and dependency updates
 
 ## Future Expansion
-- Multi-language support
-- Integration with university systems
-- Notification system for visa deadline reminders
-- Mobile application interface
-- API for third-party integrations
+- **Multi-Language Support**: Spanish, Mandarin, Hindi language models
+- **University Integration**: SSO and student information system APIs
+- **Mobile Application**: React Native or Flutter mobile client
+- **Advanced Analytics**: Student success correlation analysis
+- **Compliance Automation**: Automated form filling and deadline tracking
 
-## Limitations and Constraints
-- The system provides information only; it cannot replace legal advice
-- Responses are based on available documents and may not cover all edge cases
-- Immigration policies change frequently, requiring regular corpus updates
-- LLM responses need human verification for critical decisions
+## Constraints and Limitations
+- **Legal Disclaimer**: Information only, not legal advice
+- **Data Freshness**: Dependent on manual document updates
+- **Model Limitations**: Subject to LLM hallucination and knowledge cutoffs
+- **Cost Optimization**: Balance between performance and inference costs
+- **Regulatory Compliance**: Must adhere to educational data protection requirements
 
-## Risks and Mitigations
-- **Risk**: Incorrect information leading to visa issues
-  - **Mitigation**: Clear disclaimers, source citations, regular verification
-
-- **Risk**: Data privacy concerns
-  - **Mitigation**: Local LLM deployment, secure data handling, minimal data collection
-
-- **Risk**: System unavailability during critical periods
-  - **Mitigation**: Robust infrastructure, monitoring, and failover systems
-
-- **Risk**: Hallucination or fabrication by the LLM
-  - **Mitigation**: Strict RAG implementation, response verification mechanisms 
+This PRD reflects the current sophisticated architecture with RunPod GPU hosting, Langfuse observability, and comprehensive MLOps practices, positioning OPT-RAG as an enterprise-ready solution for international student support.

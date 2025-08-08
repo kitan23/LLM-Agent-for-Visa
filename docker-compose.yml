@@ -1,125 +1,291 @@
 version: '3.8'
 
+x-airflow-common:
+  &airflow-common
+  build:
+    context: ./infra
+    dockerfile: Dockerfile
+  environment:
+    &airflow-common-env
+    PYTHONPATH: /opt/airflow
+    AIRFLOW__WEBSERVER__SECRET_KEY: '165718e1a96dc051fa0662a709f5c25bc187e911d2dea7633e904a14c4cf'
+    AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:myredissecret@redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+  volumes:
+    - ./infra/dags:/opt/airflow/dags
+    - ./infra/logs:/opt/airflow/logs
+    - ./infra/config:/opt/airflow/config
+    - ./infra/plugins:/opt/airflow/plugins
+    - ./rag-pipeline:/opt/airflow/rag-pipeline
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    redis:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+
 services:
-  # NGINX API Gateway
-  nginx:
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
+  # Airflow Services
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
     ports:
-      - "80:80"     # HTTP
-      - "443:443"   # HTTPS (for future use)
-    depends_on:
-      - api
-      - streamlit-ui
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+    restart: always
     networks:
+      - airflow
       - opt-rag-network
-    volumes:
-      - ./nginx/logs:/var/log/nginx
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
 
-  # FastAPI Backend Service
-  api:
-    build:
-      context: ./rag-pipeline
-      dockerfile: Dockerfile.api
-    ports:
-      - "8000:8000"
-    container_name: opt-rag-api
-    expose:
-      - "8000"
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--local"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    networks:
+      - airflow
+      - opt-rag-network
+
+  airflow-worker:
+    <<: *airflow-common
+    command: celery worker
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "WorkerJob", "--local"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    networks:
+      - airflow
+      - opt-rag-network
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "TriggererJob", "--local"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+    networks:
+      - airflow
+      - opt-rag-network
+
+  # Infrastructure Services
+  postgres:
+    image: postgres:13
+    container_name: postgres
     environment:
-      - MODEL_PATH=/app/models/qwen2.5-1.5b
-      - VECTOR_STORE_PATH=/app/vector_store
-      - DEVICE=cpu
-      - OPT_RAG_USE_API_LLM=${OPT_RAG_USE_API_LLM:-true}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
     volumes:
-      - ./rag-pipeline/models:/app/models
-      - ./rag-pipeline/vector_store:/app/vector_store
-      - ./rag-pipeline/examples:/app/examples
-    networks:
-      - opt-rag-network
-    restart: unless-stopped
-
-  # Streamlit UI
-  streamlit-ui:
-    build:
-      context: ./streamlit
-      dockerfile: Dockerfile
-    container_name: opt-rag-ui
+      - postgres-db-volume:/var/lib/postgresql/data
     ports:
-      - "8501:8501"
-    expose:
-      - "8501"
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - airflow
+      - opt-rag-network
+
+  redis:
+    image: "redis:7"
+    container_name: redis
+    command: >
+      --requirepass myredissecret
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "myredissecret", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - airflow
+      - opt-rag-network
+
+  # Milvus Vector Database
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
     environment:
-      - API_URL=http://api:8000
-    depends_on:
-      - api
-    networks:
-      - opt-rag-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
-  # Monitoring Services
-  prometheus:
-    image: prom/prometheus
-    ports:
-      - "9090:9090"
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
     volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - ./volumes/etcd:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
     networks:
-      - opt-rag-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - milvus
 
-  grafana:
-    image: grafana/grafana
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:latest
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    volumes:
+      - ./volumes/minio:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - milvus
+      - opt-rag-network
+
+  milvus-standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.3.1
+    command: ["milvus", "run", "standalone"]
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    volumes:
+      - ./volumes/milvus:/var/lib/milvus
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+    networks:
+      - milvus
+
+  # Langfuse - LLM Observability
+  langfuse-web:
+    image: langfuse/langfuse:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
+      DATABASE_URL: "postgresql://airflow:airflow@postgres:5432/langfuse"
+      SALT: "your-salt-here"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: "clickhouse"
+      CLICKHOUSE_PASSWORD: "clickhouse_password"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse"
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: "auto"
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "minioadmin"
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "minioadmin"
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "http://minio:9000"
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_AUTH: "myredissecret"
+      NEXTAUTH_URL: "http://localhost:3000"
+      NEXTAUTH_SECRET: "your-nextauth-secret-here"
     networks:
       - opt-rag-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - airflow
+      - milvus
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    ports:
-      - "6831:6831/udp"   # Jaeger Thrift compact protocol (agent)
-      - "6832:6832/udp"   # Jaeger Thrift binary protocol (agent)
-      - "5778:5778"       # Jaeger HTTP config server (agent)
-      - "16686:16686"     # Jaeger UI
-      - "14268:14268"     # Jaeger HTTP collector
-      - "14250:14250"     # Jaeger gRPC collector
-      - "4317:4317"       # OTLP gRPC
-      - "4318:4318"       # OTLP HTTP
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     environment:
-      - COLLECTOR_ZIPKIN_HOST_PORT=:9411
-      - COLLECTOR_OTLP_ENABLED=true
+      DATABASE_URL: "postgresql://airflow:airflow@postgres:5432/langfuse"
+      SALT: "your-salt-here"
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      TELEMETRY_ENABLED: "false"
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_USER: "clickhouse"
+      CLICKHOUSE_PASSWORD: "clickhouse_password"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: "langfuse"
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: "auto"
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: "minioadmin"
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: "minioadmin"
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: "http://minio:9000"
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      REDIS_AUTH: "myredissecret"
     networks:
       - opt-rag-network
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - airflow
+      - milvus
+
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    restart: always
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: "default"
+      CLICKHOUSE_USER: "clickhouse"
+      CLICKHOUSE_PASSWORD: "clickhouse_password"
+    volumes:
+      - langfuse_clickhouse_data:/var/lib/clickhouse
+      - langfuse_clickhouse_logs:/var/log/clickhouse-server
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    networks:
+      - opt-rag-network
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
 
 volumes:
-  grafana_data:
+  postgres-db-volume:
+  langfuse_clickhouse_data:
+    driver: local
+  langfuse_clickhouse_logs:
+    driver: local
 
-# Define a custom network for all services
+# Define networks for service communication
 networks:
   opt-rag-network:
-    driver: bridge 
+    driver: bridge
+  airflow:
+    name: airflow
+  milvus:
+    name: milvus

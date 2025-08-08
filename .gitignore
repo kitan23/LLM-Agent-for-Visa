@@ -80,3 +80,70 @@ Thumbs.db
 
 # Model cache directories
 */.cache/
+
+# Docker volumes and service data
+volumes/
+
+# Generated data and processing artifacts
+rag-pipeline/data/processed/
+rag-pipeline/data/raw/
+
+# Additional log directories
+infra/logs/
+nginx/logs/
+
+# Temporary directories
+streamlit/temp/
+
+# Python package build artifacts
+opt_rag.egg-info/
+*.egg-info/
+build/
+dist/
+
+# Model files (should be downloaded on demand)
+*.safetensors
+*.bin
+*.model
+*.pth
+*.pt
+
+# Specific model directories
+rag-pipeline/models/
+*.whl
+
+# Feast feature store data
+feature_store/data/
+feast_repo/data/
+
+# Airflow logs and data
+infra/logs/
+airflow/logs/
+airflow/dags/__pycache__/
+
+# Prometheus data
+prometheus/data/
+prometheus/prometheus.yml
+
+# Additional service logs
+nginx/logs/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Temporary test files
+test_output/
+*.test
+*.tmp

@@ -13,7 +13,7 @@ name = "opt-rag"
 version = "0.1.0"
 description = "A Retrieval-Augmented Generation (RAG) application to help international students with visa-related issues."
 readme = "README.md"
-requires-python = ">=3.9" # A reasonable minimum version for these packages.
+requires-python = ">=3.11,<3.13" # Compatible with Airflow
 license = "MIT" # Updated to the modern string format to resolve the deprecation warning.
 authors = [
     { name = "Your Name", email = "you@example.com" }, # Update with your details
@@ -49,6 +49,24 @@ dependencies = [
     "langchain>=0.0.267",
     "langchain-community>=0.0.1",
     "langchain-huggingface>=0.0.1",
+    
+    # PDF processing
+    "pypdf>=5.6.1",
+    "pymupdf>=1.23.0",  # fitz - better PDF text extraction
+
+    # Data processing
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "pyarrow>=10.0.0",  # Required for parquet file support
+    
+    # Airflow
+    "apache-airflow==2.9.0",
+    "apache-airflow-providers-docker>=4.3.1",
+    
+    # Feature store
+    "feast>=0.38.0",
+    "psycopg2-binary>=2.9.0",  # PostgreSQL adapter for Feast
+    "pymilvus>=2.4.0",  # Required for Feast Milvus online store
 
     # Utilities
     "python-multipart>=0.0.6",
@@ -69,5 +87,5 @@ include = ["rag_pipeline*"]
 
 [dependency-groups]
 dev = [
-    "pypdf>=5.6.1",
+    # Development dependencies can be added here
 ]
