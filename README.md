@@ -104,6 +104,56 @@ flowchart TB
     classDef cache fill:#FFEBEE,stroke:#C62828,color:#B71C1C,stroke-width:1px
 ```
 
+## 🔄 Pipeline Flow
+
+The following diagram shows the end-to-end data processing and query pipeline:
+
+```mermaid
+flowchart LR
+%% =======================
+%% OPT-RAG END-TO-END PIPELINE — CONCISE + TECH
+%% =======================
+
+%% ---- Styles ----
+classDef step fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20,stroke-width:1px
+classDef store fill:#FFF3E0,stroke:#EF6C00,color:#E65100,stroke-width:1px
+classDef serve fill:#EDE7F6,stroke:#5E35B1,color:#311B92,stroke-width:1px
+classDef guard fill:#ECEFF1,stroke:#455A64,color:#263238,stroke-width:1px
+classDef cache fill:#FFEBEE,stroke:#C62828,color:#B71C1C,stroke-width:1px
+linkStyle default stroke:#90A4AE,stroke-width:1.4px,opacity:0.9
+
+%% ---------- Ingestion ----------
+subgraph INGEST[Ingestion]
+direction LR
+  SRC1(PDFs • official docs):::step --> EXTRACT(Extract • PyPDF • PyMuPDF):::step
+  EXTRACT --> CLEAN(Clean • normalize):::step
+  CLEAN --> CHUNK(Chunk • custom):::step
+  CHUNK --> EMBED(Embeddings • all-MiniLM-L6-v2):::step
+  EMBED --> INDEX[(Vector index • Milvus • FAISS)]:::store
+  CLEAN --> DOCS[(Doc store • files)]:::store
+end
+
+%% ---------- Online Query ----------
+subgraph ONLINE[Online Query]
+direction LR
+  Q(User question • history):::step --> PREP(Preprocess • FastAPI):::step
+  PREP --> CHECK[(Cache • Redis)]:::cache
+  CHECK -->|hit| READY(Assemble answer • cached):::serve
+  CHECK -->|miss| RETR(Retrieve top-k • Milvus/FAISS):::step --> CTX(Build context):::step
+  CTX --> PROMPT(Compose prompt):::step --> ROUTE(LLM router):::step
+  ROUTE --> LLM1(Qwen2.5 • RunPod):::serve
+  ROUTE -.->|fallback| LLM2(GPT-4o-mini • OpenAI):::serve
+  LLM1 --> STREAM(Stream tokens • SSE):::serve
+  LLM2 --> STREAM
+  STREAM --> SAVE(Save • session • cache):::step
+  SAVE --> OUT(Final answer • citations):::serve
+end
+
+%% ---------- Data edges ----------
+RETR --> INDEX
+SAVE -.->|set cache| CHECK
+```
+
 ## 📚 Data Sources
 
 - **Official Documentation**: USCIS, Department of State, SEVP resources
