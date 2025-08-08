@@ -28,67 +28,80 @@ OPT-RAG is a Retrieval-Augmented Generation (RAG) system designed to help intern
 ## 🏗️ System Architecture
 
 ```mermaid
-graph TB
-    %% User Layer
-    User[👤 International Student]
-    
-    %% Frontend Layer
-    subgraph "Frontend Layer"
-        UI[🖥️ Streamlit UI<br/>Port: 8501<br/>Interactive Chat Interface]
-    end
-    
-    %% Backend Services Layer
-    subgraph "Backend Services"
-        API[🚀 FastAPI Backend<br/>Port: 8000<br/>RESTful API with Streaming]
-        
-        subgraph "RAG Pipeline"
-            DOC[📄 Document Processor<br/>PyPDF/PyMuPDF]
-            EMB[🧠 Embeddings<br/>all-MiniLM-L6-v2<br/>384-dim vectors]
-            RET[🔍 Retriever<br/>Semantic Search]
-            LLM[🤖 LLM Assistant<br/>Qwen2.5/GPT-4o-mini]
-        end
-    end
-    
-    %% Data Storage Layer
-    subgraph "Data Layer"
-        VS[💾 Vector Store<br/>Milvus/FAISS]
-        DOCS[📚 Document Storage<br/>Official Immigration Docs]
-        CACHE[⚡ Redis Cache<br/>Query Optimization]
-    end
-    
-    %% External Services
-    subgraph "LLM Infrastructure"
-        RUNPOD[🖥️ RunPod GPU<br/>Qwen2.5-1.5B]
-        OPENAI[🌟 OpenAI API<br/>GPT-4o-mini Fallback]
-    end
-    
-    %% User Flow
-    User --> UI
-    UI --> API
-    
-    %% RAG Pipeline Flow
-    API --> DOC
-    DOC --> EMB
-    EMB --> VS
-    API --> RET
-    RET --> VS
-    RET --> LLM
-    LLM --> RUNPOD
-    LLM -.->|Fallback| OPENAI
-    
-    %% Cache Integration
-    API --> CACHE
-    CACHE --> VS
-    
-    %% Document Flow
-    User -.->|"📤 Upload PDFs"| UI
-    UI -.->|"Process Documents"| DOC
-    DOC -.->|"Generate Embeddings"| EMB
-    
-    %% Query Flow
-    User -.->|"❓ Ask Question"| UI
-    RET -.->|"🔍 Find Context"| VS
-    LLM -.->|"📝 Generate Response"| User
+---
+config:
+  layout: dagre
+---
+flowchart TB
+ subgraph C["Clients"]
+    direction TB
+        U1("International Student")
+        U2("Advisor / Staff")
+  end
+ subgraph F["Frontend • Streamlit"]
+    direction TB
+        UI("Streamlit Chat UI")
+  end
+ subgraph RAG["RAG Pipeline"]
+    direction TB
+        Proc("Document Processor")
+        Embed("Embeddings")
+        Retr("Retriever")
+        Ctx("Context Builder")
+        LLM("LLM Router")
+  end
+ subgraph B["Backend • FastAPI"]
+    direction TB
+        API("FastAPI API")
+        RAG
+  end
+ subgraph D["Data Layer"]
+    direction TB
+        VS[("Vector Store")]
+        DOCS[("Document Store")]
+        RED[("Redis Cache")]
+  end
+ subgraph X["LLM Infrastructure"]
+    direction TB
+        RUNPOD("RunPod Qwen2.5")
+        OPENAI("OpenAI GPT-4o-mini")
+  end
+    U1 --> UI
+    U2 --> UI
+    UI -- HTTPS --> API
+    UI -. upload PDFs .-> Proc
+    Proc --> Embed & DOCS
+    Embed --> VS
+    API --> RED & Retr & VS & DOCS & MON("Monitoring • Logs")
+    Retr --> VS & Ctx
+    Ctx --> LLM
+    LLM --> RUNPOD & API
+    LLM -. fallback .-> OPENAI
+    API -- SSE stream --> UI
+    RUNPOD --> MON
+    OPENAI --> MON
+     U1:::client
+     U2:::client
+     UI:::ui
+     Proc:::svc
+     Embed:::svc
+     Retr:::svc
+     Ctx:::svc
+     LLM:::svc
+     API:::svc
+     VS:::data
+     DOCS:::data
+     RED:::cache
+     RUNPOD:::ext
+     OPENAI:::ext
+     MON:::ops
+    classDef client fill:#E3F2FD,stroke:#1565C0,color:#0D47A1,stroke-width:1px
+    classDef ui fill:#E8F5E9,stroke:#2E7D32,color:#1B5E20,stroke-width:1px
+    classDef svc fill:#EDE7F6,stroke:#5E35B1,color:#311B92,stroke-width:1px
+    classDef data fill:#FFF3E0,stroke:#EF6C00,color:#E65100,stroke-width:1px
+    classDef ext fill:#F3E5F5,stroke:#8E24AA,color:#4A148C,stroke-width:1px
+    classDef ops fill:#ECEFF1,stroke:#455A64,color:#263238,stroke-width:1px
+    classDef cache fill:#FFEBEE,stroke:#C62828,color:#B71C1C,stroke-width:1px
 ```
 
 ## 📚 Data Sources
