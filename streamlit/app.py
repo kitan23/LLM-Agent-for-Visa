@@ -231,8 +231,11 @@ if prompt:
                 logger.info(f"Streaming API response status: {response.status_code}")
                 
                 if response.status_code == 200:
+                    # Capture the request ID for cancellation
+                    request_id = None
+
                     # Process the SSE stream
-                    response_started = False
+                    error_message = None
                     buffer = ""
                     
                     # Process the response as a stream of bytes
@@ -261,13 +264,24 @@ if prompt:
                                         # Parse the JSON-formatted data
                                         parsed_data = json.loads(data)
                                         
-                                        # Skip request ID messages
+                                        # Capture the request ID (for the /api/cancel endpoint)
                                         if isinstance(parsed_data, dict) and "request_id" in parsed_data:
+                                            request_id = parsed_data["request_id"]
                                             continue
                                         
-                                        # Get the token
-                                        token = parsed_data
-                                        response_started = True
+                                        # Surface server-side errors
+                                        if isinstance(parsed_data, dict) and "error" in parsed_data:
+                                            error_message = parsed_data["error"]
+                                            continue
+                                        
+                                        # Extract the token from the payload object
+                                        if isinstance(parsed_data, dict) and "token" in parsed_data:
+                                            token = parsed_data["token"]
+                                        elif isinstance(parsed_data, str):
+                                            # Backwards compatibility: bare JSON strings
+                                            token = parsed_data
+                                        else:
+                                            continue
                                         
                                         # Skip common assistant prefixes
                                         if token in ["A:", "A: ", "Assistant:", "Assistant: ", "AI:", "AI: ", "Human:", "Human: "]:
@@ -282,15 +296,10 @@ if prompt:
                                         
                                     except json.JSONDecodeError as e:
                                         logger.warning(f"Error parsing token: {e}, data: {data!r}")
-                                        # Try to recover from malformed JSON
-                                        if data.startswith('"') and data.endswith('"'):
-                                            try:
-                                                token = data.strip('"')
-                                                full_response += token
-                                                message_placeholder.markdown(full_response + "▌")
-                                                response_started = True
-                                            except Exception:
-                                                pass
+                    
+                    if error_message:
+                        logger.error(f"Server reported an error: {error_message}")
+                        full_response = f"❌ {error_message}"
                     
                     # Remove any common prefixes from final response
                     for prefix in ["A:", "Assistant:", "AI:"]:

@@ -98,8 +98,10 @@ services:
       - POSTGRES_USER=airflow
       - POSTGRES_PASSWORD=airflow
       - POSTGRES_DB=airflow
+      - POSTGRES_MULTIPLE_DATABASES=langfuse
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
     healthcheck:
@@ -181,6 +183,52 @@ services:
       - "minio"
     networks:
       - milvus
+
+  # OPT-RAG Application Services
+  rag-api:
+    build:
+      context: ./rag-pipeline
+      dockerfile: Dockerfile.api
+    container_name: rag-api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - VECTOR_STORE_PATH=/app/vector_store
+      - LANGFUSE_HOST=http://langfuse-web:3000
+    ports:
+      - "8000:8000"
+    volumes:
+      - rag-vector-store:/app/vector_store
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - opt-rag-network
+
+  streamlit:
+    build:
+      context: ./streamlit
+      dockerfile: Dockerfile
+    container_name: streamlit
+    environment:
+      - API_URL=http://rag-api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - rag-api
+    restart: unless-stopped
+    networks:
+      - opt-rag-network
 
   # Langfuse - LLM Observability
   langfuse-web:
@@ -280,6 +328,7 @@ volumes:
     driver: local
   langfuse_clickhouse_logs:
     driver: local
+  rag-vector-store:
 
 # Define networks for service communication
 networks:

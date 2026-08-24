@@ -180,16 +180,15 @@ cd OPT-RAG
 
 2. **Set Up Environment Variables**
 ```bash
-# Create .env file with your configuration
-cat > .env << EOF
-# LLM Configuration (choose one)
-OPENAI_API_KEY=your_openai_api_key_here  # For OpenAI
-# OR
-RUNPOD_API_KEY=your_runpod_api_key_here  # For RunPod
+# Copy the example env file and fill in your keys
+cp .env.example .env
 
-# Optional: Use local model instead
-OPT_RAG_USE_API_LLM=false  # Set to false for local model
-EOF
+# Then edit .env — at least one LLM provider is required:
+#   RUNPOD_API_KEY + RUNPOD_ENDPOINT_ID   (primary)
+#   OPENAI_API_KEY                        (fallback)
+#
+# Without any provider the API still starts in degraded mode
+# (health check reports it) but cannot answer questions.
 ```
 
 3. **Start the Application**
@@ -208,6 +207,8 @@ docker-compose logs -f
 - **Chat Interface**: http://localhost:8501
 - **API Documentation**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
+- **Langfuse Dashboard**: http://localhost:3000
+- **Airflow UI**: http://localhost:8080
 
 ### Local Development Setup
 

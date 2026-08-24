@@ -5,7 +5,7 @@ Tests for document loading functionality.
 import pytest
 import asyncio
 from pathlib import Path
-from document_processor.loader import load_pdf_documents
+from src.document_processor.loader import load_pdf_documents
 
 
 @pytest.mark.asyncio
@@ -38,10 +38,22 @@ async def test_load_pdf_documents_nonexistent_file():
 
 
 @pytest.mark.asyncio
-async def test_load_pdf_documents_unsupported_format(tmp_path):
-    """Test loading an unsupported file format."""
-    text_file = tmp_path / "test.txt"
-    text_file.write_text("This is a test")
-    
+async def test_load_pdf_documents_txt_file(tmp_path):
+    """Test loading a plain text file."""
+    text_file = tmp_path / "notes.txt"
+    text_file.write_text("OPT filing guidance text")
+
     documents = await load_pdf_documents(text_file)
-    assert len(documents) == 0  # Should return empty list for unsupported formats
+    assert len(documents) == 1
+    assert documents[0].page_content == "OPT filing guidance text"
+    assert documents[0].metadata["source"] == str(text_file)
+
+
+@pytest.mark.asyncio
+async def test_load_pdf_documents_unsupported_format(tmp_path):
+    """Test loading an unsupported file format returns no documents."""
+    bad_file = tmp_path / "image.png"
+    bad_file.write_bytes(b"\x89PNG\r\n")
+
+    documents = await load_pdf_documents(bad_file)
+    assert len(documents) == 0
